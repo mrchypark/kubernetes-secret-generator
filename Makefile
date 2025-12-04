@@ -75,5 +75,6 @@ crd: kind
 
 .PHONY: build
 build:
+	# NOTE: This relies on the deprected operator-sdk build command (last present in 0.19)
 	operator-sdk build --go-build-args "-ldflags -X=version.Version=${SECRET_OPERATOR_VERSION}" ${DOCKER_IMAGE}
 	@exit $(.SHELLSTATUS)
