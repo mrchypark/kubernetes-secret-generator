@@ -111,7 +111,7 @@ func TestGenerateSSHKeypairDataWithAlgorithmTreatsByteLengthAsBits(t *testing.T)
 }
 
 func TestSSHKeypairGeneratorDefaultsECDSAToP256WithNilData(t *testing.T) {
-	secret := &corev1.Secret{
+	instance := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
 				AnnotationSSHKeyAlgorithm: SSHKeyAlgorithmECDSA,
@@ -119,12 +119,12 @@ func TestSSHKeypairGeneratorDefaultsECDSAToP256WithNilData(t *testing.T) {
 		},
 	}
 
-	_, err := SSHKeypairGenerator{}.generateData(secret)
+	_, err := SSHKeypairGenerator{}.generateData(instance)
 	if err != nil {
 		t.Fatalf("generate keypair: %v", err)
 	}
 
-	key, err := rawPrivateKeyFromPEM(secret.Data[SecretFieldPrivateKey])
+	key, err := rawPrivateKeyFromPEM(instance.Data[SecretFieldPrivateKey])
 	if err != nil {
 		t.Fatalf("parse private key: %v", err)
 	}
@@ -143,19 +143,19 @@ func TestSSHKeypairGeneratorDefaultsGlobalECDSAToP256(t *testing.T) {
 		viper.Set("ssh-key-algorithm", SSHKeyAlgorithmRSA)
 	})
 
-	secret := &corev1.Secret{
+	instance := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{},
 		},
 		Data: map[string][]byte{},
 	}
 
-	_, err := SSHKeypairGenerator{}.generateData(secret)
+	_, err := SSHKeypairGenerator{}.generateData(instance)
 	if err != nil {
 		t.Fatalf("generate keypair: %v", err)
 	}
 
-	key, err := rawPrivateKeyFromPEM(secret.Data[SecretFieldPrivateKey])
+	key, err := rawPrivateKeyFromPEM(instance.Data[SecretFieldPrivateKey])
 	if err != nil {
 		t.Fatalf("parse private key: %v", err)
 	}
