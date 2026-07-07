@@ -31,18 +31,17 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v7
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
         id: go
 
-      - name: Check out code into the Go module directory
-        uses: actions/checkout@v7
-
       - name: Install golangci-lint
-        run: |
-          curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b "$(go env GOPATH)"/bin v2.7.1
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7.1
 
       - name: Run golangci-lint
         run: |
