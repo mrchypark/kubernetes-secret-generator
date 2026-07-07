@@ -112,7 +112,7 @@ func doReconcileSSHKeyPairController(t *testing.T, sshKeyPair *v1alpha1.SSHKeyPa
 	} else {
 		require.NoError(t, err)
 	}
-	require.False(t, res.Requeue)
+	require.Equal(t, reconcile.Result{}, res)
 }
 
 func TestControllerGenerateSSHSecret(t *testing.T) {

@@ -102,7 +102,7 @@ func doReconcileStringSecretController(t *testing.T, stringSecret *v1alpha1.Stri
 	} else {
 		require.NoError(t, err)
 	}
-	require.False(t, res.Requeue)
+	require.Equal(t, reconcile.Result{}, res)
 }
 
 // TestControllerGenerateSecretSingleField tests if a field can be created using spec.Fields

@@ -157,7 +157,7 @@ func doReconcileBasicAuthController(t *testing.T, basicAuth *v1alpha1.BasicAuth,
 	} else {
 		require.NoError(t, err)
 	}
-	require.False(t, res.Requeue)
+	require.Equal(t, reconcile.Result{}, res)
 }
 
 func TestControllerGenerateBasicAuthNoRegenerate(t *testing.T) {

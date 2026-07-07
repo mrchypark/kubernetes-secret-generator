@@ -51,10 +51,6 @@ type StringSecretList struct {
 	Items           []StringSecret `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&StringSecret{}, &StringSecretList{})
-}
-
 func (in *StringSecretList) GetTypeMeta() metav1.TypeMeta {
 	return in.TypeMeta
 }

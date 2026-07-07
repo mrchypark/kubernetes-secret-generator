@@ -59,10 +59,6 @@ type SSHKeyPairList struct {
 	Items           []SSHKeyPair `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&SSHKeyPair{}, &SSHKeyPairList{})
-}
-
 func (in *SSHKeyPairList) GetTypeMeta() metav1.TypeMeta {
 	return in.TypeMeta
 }

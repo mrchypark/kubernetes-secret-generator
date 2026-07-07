@@ -48,10 +48,6 @@ type BasicAuthList struct {
 	Items           []BasicAuth `json:"items"`
 }
 
-func init() {
-	SchemeBuilder.Register(&BasicAuth{}, &BasicAuthList{})
-}
-
 func (in *BasicAuthList) GetTypeMeta() metav1.TypeMeta {
 	return in.TypeMeta
 }

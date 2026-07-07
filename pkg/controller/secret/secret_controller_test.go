@@ -163,7 +163,7 @@ func doReconcile(t *testing.T, targetSecret *corev1.Secret, isErr bool) {
 	} else {
 		require.NoError(t, err)
 	}
-	require.False(t, res.Requeue)
+	require.Equal(t, reconcile.Result{}, res)
 }
 
 func TestDoesNotTouchOtherSecrets(t *testing.T) {
