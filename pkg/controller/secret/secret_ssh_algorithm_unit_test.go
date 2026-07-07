@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"golang.org/x/crypto/ssh"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestGenerateSSHKeypairDataWithAlgorithm(t *testing.T) {
@@ -104,5 +106,32 @@ func TestGenerateSSHKeypairDataWithAlgorithmTreatsByteLengthAsBits(t *testing.T)
 			}
 			tt.check(t, key)
 		})
+	}
+}
+
+func TestSSHKeypairGeneratorDefaultsECDSAToP256WithNilData(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationSSHKeyAlgorithm: SSHKeyAlgorithmECDSA,
+			},
+		},
+	}
+
+	_, err := SSHKeypairGenerator{}.generateData(secret)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+
+	key, err := rawPrivateKeyFromPEM(secret.Data[SecretFieldPrivateKey])
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	privateKey, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("key type = %T, want *ecdsa.PrivateKey", key)
+	}
+	if privateKey.Curve.Params().BitSize != 256 {
+		t.Fatalf("ecdsa curve size = %d bits, want 256", privateKey.Curve.Params().BitSize)
 	}
 }

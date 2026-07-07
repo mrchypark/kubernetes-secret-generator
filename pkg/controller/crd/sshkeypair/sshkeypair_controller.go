@@ -112,6 +112,9 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	existingPrivateKey := existing.Data[secret.SecretFieldPrivateKey]
 
 	targetSecret := existing.DeepCopy()
+	if targetSecret.Data == nil {
+		targetSecret.Data = make(map[string][]byte)
+	}
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {

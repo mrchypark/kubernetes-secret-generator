@@ -45,6 +45,14 @@ func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.R
 	}
 
 	algorithm := instance.Annotations[AnnotationSSHKeyAlgorithm]
+	if algorithm == SSHKeyAlgorithmECDSA {
+		if _, ok := instance.Annotations[AnnotationSecretLength]; !ok {
+			length = "256"
+		}
+	}
+	if instance.Data == nil {
+		instance.Data = make(map[string][]byte)
+	}
 	err = GenerateSSHKeypairDataWithAlgorithm(sg.log, algorithm, length, regenerate, instance.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err

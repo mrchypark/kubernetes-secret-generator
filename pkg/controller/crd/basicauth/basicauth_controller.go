@@ -112,6 +112,9 @@ func (r *ReconcileBasicAuth) updateSecret(ctx context.Context, instance *v1alpha
 	existingAuth := existing.Data[secret.FieldBasicAuthIngress]
 
 	targetSecret := existing.DeepCopy()
+	if targetSecret.Data == nil {
+		targetSecret.Data = make(map[string][]byte)
+	}
 
 	c := crd.Client{Client: r.client}
 

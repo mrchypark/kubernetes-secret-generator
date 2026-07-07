@@ -129,6 +129,9 @@ func (c *Client) getSecretRefAndSetStatus(ctx context.Context, desiredSecret *co
 // updateData updates the given Secret's data property. If regenerate is false,
 // only new keys will be added, existing keys will not be modified.
 func UpdateData(data map[string]string, targetSecret *corev1.Secret, regenerate bool) {
+	if targetSecret.Data == nil {
+		targetSecret.Data = make(map[string][]byte)
+	}
 	for key := range data {
 		if string(targetSecret.Data[key]) == "" || regenerate {
 			targetSecret.Data[key] = []byte(data[key])
