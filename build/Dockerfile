@@ -1,7 +1,8 @@
 # Build the manager binary
-FROM golang:1.25 AS builder
+FROM golang:1.26.4 AS builder
 
 WORKDIR /workdir
+ARG VERSION=0.0.1
 # ENV GOPATH=/go
 # Copy the Go Modules manifests
 COPY go.mod go.sum /workdir/
@@ -9,17 +10,13 @@ COPY go.mod go.sum /workdir/
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
-RUN cat go.mod
-
 # Copy the go source
 COPY cmd cmd
 COPY pkg pkg
 COPY version version
 
-RUN ls -la /workdir
-
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o /workspace/manager ./cmd/manager/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags "-X=github.com/mittwald/kubernetes-secret-generator/version.Version=${VERSION}" -o /workspace/manager ./cmd/manager/main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details

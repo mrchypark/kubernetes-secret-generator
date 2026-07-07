@@ -22,7 +22,6 @@ import (
 )
 
 var log = logf.Log.WithName("controller_ssh_secret")
-var reqLogger logr.Logger
 
 const Kind = "SSHKeyPair"
 
@@ -53,7 +52,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource SSHKeyPair
-	err = c.Watch(&source.Kind{Type: &v1alpha1.SSHKeyPair{}}, &handler.EnqueueRequestForObject{}, crd.IgnoreStatusUpdatePredicate())
+	err = c.Watch(source.Kind(mgr.GetCache(), &v1alpha1.SSHKeyPair{}, &handler.TypedEnqueueRequestForObject[*v1alpha1.SSHKeyPair]{}, crd.IgnoreStatusUpdatePredicate[*v1alpha1.SSHKeyPair]()))
 	if err != nil {
 		return err
 	}
@@ -66,10 +65,9 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
-func (r *ReconcileSSHKeyPair) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger = log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
+func (r *ReconcileSSHKeyPair) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling SSSHKeyPair")
-	ctx := context.Background()
 
 	// fetch the SSHKeyPair instance
 	instance := &v1alpha1.SSHKeyPair{}
@@ -83,19 +81,19 @@ func (r *ReconcileSSHKeyPair) Reconcile(request reconcile.Request) (reconcile.Re
 	err = r.client.Get(ctx, request.NamespacedName, existing)
 	// secret not found, create new one
 	if apierrors.IsNotFound(err) {
-		return r.createNewSecret(ctx, instance)
+		return r.createNewSecret(ctx, instance, reqLogger)
 	}
 	// check for other errors
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
-	return r.updateSecret(ctx, existing, instance)
+	return r.updateSecret(ctx, existing, instance, reqLogger)
 }
 
 // updateSecret attempts to update an existing Secret object with new values. Secret will only be updated,
 // if it is owned by a SSHKeyPair CR.
-func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Secret, instance *v1alpha1.SSHKeyPair) (reconcile.Result, error) {
+func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Secret, instance *v1alpha1.SSHKeyPair, reqLogger logr.Logger) (reconcile.Result, error) {
 	// Check if Secret is owned by SSHKeyPair cr, otherwise do nothing
 	existingOwnerRefs := existing.OwnerReferences
 
@@ -104,6 +102,7 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	}
 
 	// get config values from instance
+	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	regenerate := instance.Spec.ForceRegenerate
 	data := instance.Spec.Data
@@ -114,15 +113,22 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	existingPrivateKey := existing.Data[privateKeyField]
 
 	targetSecret := existing.DeepCopy()
+	if targetSecret.Data == nil {
+		targetSecret.Data = make(map[string][]byte)
+	}
+
+	keyRegenerate := regenerate
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
 		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
+		delete(targetSecret.Data, publicKeyField)
+		keyRegenerate = false
 	}
 
 	crd.UpdateData(data, targetSecret, regenerate)
 
-	err := secret.GenerateSSHKeypairData(reqLogger, length, privateKeyField, publicKeyField, regenerate, targetSecret.Data)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, keyRegenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -135,10 +141,11 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 // createNewSecret creates a new ssh key pair from the provided values. The Secret's owner will be set
 // as the SSHKeyPair that is being reconciled and a reference to the Secret will be stored in
 // the CR's status
-func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1alpha1.SSHKeyPair) (reconcile.Result, error) {
+func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1alpha1.SSHKeyPair, reqLogger logr.Logger) (reconcile.Result, error) {
 	values := make(map[string][]byte)
 
 	// get config values from instance
+	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	data := instance.Spec.Data
 	instancePrivateKey := []byte(instance.Spec.PrivateKey)
@@ -151,7 +158,7 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 
 	values[privateKeyField] = instancePrivateKey
 
-	err := secret.GenerateSSHKeypairData(reqLogger, length, privateKeyField, publicKeyField, false, values)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, false, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}

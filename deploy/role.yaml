@@ -4,13 +4,17 @@ metadata:
   name: kubernetes-secret-generator
 rules:
   - apiGroups:
-      - ""
+      - coordination.k8s.io
     resources:
-      - configmaps
+      - leases
     verbs:
       - create
       - delete
       - get
+      - list
+      - patch
+      - update
+      - watch
   - apiGroups:
       - ""
     resources:

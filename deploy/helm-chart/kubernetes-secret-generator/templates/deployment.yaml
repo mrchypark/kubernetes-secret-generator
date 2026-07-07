@@ -41,6 +41,8 @@ spec:
           ports:
             - containerPort: 8080
               name: healthcheck
+            - containerPort: 8383
+              name: metrics
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
@@ -62,7 +64,7 @@ spec:
             timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
             successThreshold: {{ .Values.readinessProbe.successThreshold }}
             failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
-          {{- end }}              
+          {{- end }}
           env:
             - name: WATCH_NAMESPACE
               value: {{ template "kubernetes-secret-generator.watchNamespace" . }}
@@ -76,6 +78,8 @@ spec:
               value: {{ .Values.regenerateInsecure | quote }}
             - name: SECRET_LENGTH
               value: {{ .Values.secretLength | quote }}
+            - name: SSH_KEY_ALGORITHM
+              value: {{ .Values.sshKeyAlgorithm | quote }}
             - name: USE_METRICS_SERVICE
               value: {{ .Values.useMetricsService | quote }}
           resources:

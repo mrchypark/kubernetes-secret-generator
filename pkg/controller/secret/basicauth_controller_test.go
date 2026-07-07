@@ -150,7 +150,7 @@ func doReconcileBasicAuthController(t *testing.T, basicAuth *v1alpha1.BasicAuth,
 	rec := basicauth.NewReconciler(mgr)
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: basicAuth.Name, Namespace: basicAuth.Namespace}}
 
-	res, err := rec.Reconcile(req)
+	res, err := rec.Reconcile(context.TODO(), req)
 
 	if isErr {
 		require.Error(t, err)

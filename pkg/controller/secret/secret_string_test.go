@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/imdario/mergo"
+	"dario.cat/mergo"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"

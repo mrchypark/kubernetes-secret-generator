@@ -22,7 +22,6 @@ import (
 )
 
 var log = logf.Log.WithName("controller_string_secret")
-var reqLogger logr.Logger
 
 const Kind = "StringSecret"
 
@@ -52,7 +51,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 	// Watch for changes to primary resource string
-	err = c.Watch(&source.Kind{Type: &v1alpha1.StringSecret{}}, &handler.EnqueueRequestForObject{}, crd.IgnoreStatusUpdatePredicate())
+	err = c.Watch(source.Kind(mgr.GetCache(), &v1alpha1.StringSecret{}, &handler.TypedEnqueueRequestForObject[*v1alpha1.StringSecret]{}, crd.IgnoreStatusUpdatePredicate[*v1alpha1.StringSecret]()))
 	if err != nil {
 		return err
 	}
@@ -65,10 +64,9 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
-func (r *ReconcileStringSecret) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger = log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
+func (r *ReconcileStringSecret) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling StringSecret")
-	ctx := context.Background()
 	// fetch the StringSecret instance
 	instance := &v1alpha1.StringSecret{}
 	err := r.client.Get(ctx, request.NamespacedName, instance)
@@ -81,7 +79,7 @@ func (r *ReconcileStringSecret) Reconcile(request reconcile.Request) (reconcile.
 	err = r.client.Get(ctx, request.NamespacedName, existing)
 	// secret not found, create new one
 	if errors.IsNotFound(err) {
-		return r.createNewSecret(ctx, instance)
+		return r.createNewSecret(ctx, instance, reqLogger)
 	}
 	// check for other errors
 	if err != nil {
@@ -89,12 +87,12 @@ func (r *ReconcileStringSecret) Reconcile(request reconcile.Request) (reconcile.
 	}
 
 	// no errors, so secret exists, attempt to update
-	return r.updateSecret(ctx, instance, existing)
+	return r.updateSecret(ctx, instance, existing, reqLogger)
 }
 
 // updateSecret attempts to update an existing Secret object with new values. Secret will only be updated,
 // if it is owned by a StringSecret cr.
-func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1alpha1.StringSecret, existing *v1.Secret) (reconcile.Result, error) {
+func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1alpha1.StringSecret, existing *v1.Secret, reqLogger logr.Logger) (reconcile.Result, error) {
 	// check if secret was created by a cr of the StringSecret kind
 	existingOwnerRefs := existing.OwnerReferences
 
@@ -112,7 +110,7 @@ func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1al
 	crd.UpdateData(data, targetSecret, regenerate)
 
 	// Generate values from fields property
-	err := setValuesForFields(fields, regenerate, targetSecret.Data)
+	err := setValuesForFields(reqLogger, fields, regenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -125,7 +123,7 @@ func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1al
 // createNewSecret creates a new string secret from the provided values. The Secret's owner will be set
 // as the StringSecret resource that is being reconciled and a reference to the Secret will be stored in
 // the cr's status
-func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v1alpha1.StringSecret) (reconcile.Result, error) {
+func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v1alpha1.StringSecret, reqLogger logr.Logger) (reconcile.Result, error) {
 	fields := instance.Spec.Fields
 	data := instance.Spec.Data
 
@@ -136,7 +134,7 @@ func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v
 	}
 
 	// generate values from fields property
-	err := setValuesForFields(fields, true, values)
+	err := setValuesForFields(reqLogger, fields, true, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -148,7 +146,7 @@ func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v
 
 // setValuesForFields iterates over the given list of Fields and generates new random strings if the corresponding entry is empty or
 // regeneration is forced
-func setValuesForFields(fields []v1alpha1.Field, regenerate bool, values map[string][]byte) error {
+func setValuesForFields(reqLogger logr.Logger, fields []v1alpha1.Field, regenerate bool, values map[string][]byte) error {
 	// generate only empty fields if regenerate wasn't set to true
 	for _, field := range fields {
 		if string(values[field.FieldName]) == "" || regenerate {

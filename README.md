@@ -23,9 +23,11 @@ You might want to take a look a the [values.yaml](deploy/helm-chart/kubernetes-s
 
 - `secretLength` defines the length of the generated secret values.
 
+- `sshKeyAlgorithm` defines the default SSH key algorithm.
+
 - `watchNamespace` defines, which namespaces should be watched for secret objects.
 
-- `useMetricsService` toggles whether the operator should provide a service for metrics monitoring by Prometheus. If this is set to true, the operator will start with additional permissions, namely `get` permissions for `replicasets` and `deployments` in the apiGroup `apps`, as well as `create` permissions for `services` and create the needed services during startup.
+- `useMetricsService` is deprecated. The operator always exposes controller metrics on port `8383`; create a Kubernetes `Service`/`ServiceMonitor` from your deployment manifests if Prometheus should scrape it.
 
   To watch a single namespace, set it to the desired namespace name.
 Multiple namespaces are supported and can be set as a comma-separated list: `ns1,ns2`.
@@ -136,6 +138,9 @@ To generate SSH Key Pairs, the `secret-generator.v1.mittwald.de/type` annotation
 The operator will then add two keys to the secret object, `ssh-publickey` and `ssh-privatekey`, each containing the respective key.
 
 The Private Key will be PEM encoded, the Public Key will have the authorized-keys format.
+The key algorithm can be selected using the `secret-generator.v1.mittwald.de/ssh-key-algorithm` annotation.
+Supported values are `rsa` (default), `ecdsa` and `ed25519`. For RSA, the length annotation is interpreted as bits.
+For ECDSA, supported lengths are `256`, `384` and `521`. Ed25519 ignores the length annotation.
 
 ```yaml
 apiVersion: v1
@@ -143,6 +148,7 @@ kind: Secret
 metadata:
   annotations:
     secret-generator.v1.mittwald.de/type: ssh-keypair
+    secret-generator.v1.mittwald.de/ssh-key-algorithm: ed25519
 data: {}
 ```
 
@@ -232,7 +238,9 @@ If the target `Secret` already exists and is not owned by a `StringSecret` resou
 
 ### SSH Key Pair via SSHKeyPair-CR
 
-A `SSHKeyPair` resource can be used to generate an ssh key pair. It supports `spec.length`, `spec.data` and `spec.forceRegenerate` similar to `StringSecret` resources.
+A `SSHKeyPair` resource can be used to generate an ssh key pair. It supports `spec.algorithm`, `spec.length`, `spec.data` and `spec.forceRegenerate` similar to `StringSecret` resources.
+Supported algorithms are `rsa` (default), `ecdsa` and `ed25519`. For RSA, `spec.length` is interpreted as bits.
+For ECDSA, supported lengths are `256`, `384` and `521`. Ed25519 ignores `spec.length`.
 The field `spec.privateKey` can be used to specify a private key, which will be used during runtime to regenerate a matching public key.
 Updating is handled similar to `StringSecret` resources, unowned `Secrets` are not modified, and existing fields are only updated if regeneration is forced. However, should the public key be missing, the operator will attempt to regenerate it.
 
@@ -243,7 +251,7 @@ metadata:
   name: "example-ssh"
   namespace: "default"
 spec:
-  length: "40"
+  algorithm: "ed25519"
   forceRegenerate: false
   data:
     example: "data"

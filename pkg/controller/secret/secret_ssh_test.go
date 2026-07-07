@@ -3,8 +3,8 @@ package secret_test
 import (
 	"bytes"
 	"context"
+	"dario.cat/mergo"
 	"github.com/go-logr/logr"
-	"github.com/imdario/mergo"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"

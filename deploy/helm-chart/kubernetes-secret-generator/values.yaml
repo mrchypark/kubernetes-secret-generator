@@ -4,8 +4,8 @@ global:
   imagePullSecrets:
 
 image:
-  registry: quay.io
-  repository: mittwald/kubernetes-secret-generator
+  registry: ghcr.io
+  repository: mrchypark/kubernetes-secret-generator
   # if no tag is given, the chart's appVersion is used
   # tag: latest
   pullPolicy: Always
@@ -64,12 +64,16 @@ regenerateInsecure: "true"
 # Length of the generated secrets
 secretLength: 40
 
+# Default SSH key algorithm. Supported values: rsa, ecdsa, ed25519.
+sshKeyAlgorithm: rsa
+
 # Namespace that are watched for secret generation
 # Accepts a comma-separated list of namespaces: ns1,ns2
 # If set to "", all namespaces will be watched
 # Accessing secrets in namespaces other than the deployed one requires permissions via a cluster role (on by default)
 watchNamespace: ""
 
+# Deprecated. Metrics are served on port 8383; create Service/ServiceMonitor manifests separately.
 useMetricsService: false
 
 volumeMounts: []
