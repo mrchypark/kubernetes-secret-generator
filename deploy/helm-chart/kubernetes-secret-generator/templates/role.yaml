@@ -9,18 +9,6 @@ metadata:
 rules:
   # leader election
   - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
-  - apiGroups:
       - coordination.k8s.io
     resources:
       - leases
@@ -96,18 +84,6 @@ metadata:
   {{ include "kubernetes-secret-generator.labels" . | nindent 4 }}
 rules:
   # leader election
-  - apiGroups:
-      - ""
-    resources:
-      - configmaps
-    verbs:
-      - create
-      - delete
-      - get
-      - list
-      - patch
-      - update
-      - watch
   - apiGroups:
       - coordination.k8s.io
     resources:

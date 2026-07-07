@@ -112,7 +112,7 @@ func doReconcileSSHKeyPairController(t *testing.T, sshKeyPair *v1alpha1.SSHKeyPa
 
 func TestControllerGenerateSSHSecret(t *testing.T) {
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length: "40",
+		Length: "2048",
 		Type:   string(corev1.SecretTypeOpaque),
 		Data:   map[string]string{},
 	}
@@ -133,7 +133,7 @@ func TestControllerGenerateSSHSecret(t *testing.T) {
 
 func TestControllerRegenerateSSHSecret(t *testing.T) {
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length:          "40",
+		Length:          "2048",
 		Type:            string(corev1.SecretTypeOpaque),
 		Data:            map[string]string{},
 		ForceRegenerate: true,
@@ -152,7 +152,7 @@ func TestControllerRegenerateSSHSecret(t *testing.T) {
 	oldPrivateKey := string(out.Data[secret.SecretFieldPrivateKey])
 	oldPublicKey := string(out.Data[secret.SecretFieldPublicKey])
 
-	in.Spec.Length = "35"
+	in.Spec.Length = "3072"
 
 	doReconcileSSHKeyPairController(t, in, false)
 
@@ -175,7 +175,7 @@ func TestControllerRegenerateSSHSecret(t *testing.T) {
 
 func TestControllerDoNotRegenerateSecret(t *testing.T) {
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length:          "40",
+		Length:          "2048",
 		Type:            string(corev1.SecretTypeOpaque),
 		Data:            map[string]string{},
 		ForceRegenerate: false,
@@ -194,7 +194,7 @@ func TestControllerDoNotRegenerateSecret(t *testing.T) {
 	oldPrivateKey := string(out.Data[secret.SecretFieldPrivateKey])
 	oldPublicKey := string(out.Data[secret.SecretFieldPublicKey])
 
-	in.Spec.Length = "35"
+	in.Spec.Length = "3072"
 
 	doReconcileSSHKeyPairController(t, in, false)
 
@@ -217,7 +217,7 @@ func TestControllerDoNotRegenerateSecret(t *testing.T) {
 
 func TestControllerDoNotRegenerateSSHSecretFixMissingPublicKey(t *testing.T) {
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length:          "40",
+		Length:          "2048",
 		Type:            string(corev1.SecretTypeOpaque),
 		Data:            map[string]string{},
 		ForceRegenerate: false,
@@ -240,7 +240,7 @@ func TestControllerDoNotRegenerateSSHSecretFixMissingPublicKey(t *testing.T) {
 
 	require.NoError(t, mgr.GetClient().Update(context.TODO(), out))
 
-	in.Spec.Length = "35"
+	in.Spec.Length = "3072"
 
 	doReconcileSSHKeyPairController(t, in, false)
 
@@ -264,10 +264,10 @@ func TestControllerDoNotRegenerateSSHSecretFixMissingPublicKey(t *testing.T) {
 func TestControllerRegeneratePublicKey(t *testing.T) {
 	data := make(map[string][]byte)
 	var log logr.Logger
-	err := secret.GenerateSSHKeypairData(log, "40", true, data)
+	err := secret.GenerateSSHKeypairData(log, "2048", true, data)
 	require.NoError(t, err)
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length:          "40",
+		Length:          "2048",
 		PrivateKey:      string(data[secret.SecretFieldPrivateKey]),
 		Type:            string(corev1.SecretTypeOpaque),
 		Data:            map[string]string{},
@@ -309,7 +309,7 @@ func TestControllerDoNotTouchOtherSSHSecrets(t *testing.T) {
 	require.NoError(t, mgr.GetClient().Create(context.TODO(), secret))
 
 	testSpec := v1alpha1.SSHKeyPairSpec{
-		Length: "40",
+		Length: "2048",
 		Type:   string(corev1.SecretTypeOpaque),
 		Data:   map[string]string{},
 	}

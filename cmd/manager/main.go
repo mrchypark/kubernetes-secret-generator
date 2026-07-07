@@ -104,7 +104,7 @@ func main() {
 		Metrics:                    metricsserver.Options{BindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort)},
 		HealthProbeBindAddress:     ":8080",
 		LeaderElection:             true,
-		LeaderElectionResourceLock: "configmapsleases",
+		LeaderElectionResourceLock: "leases",
 		LeaderElectionID:           "kubernetes-secret-generator-lock",
 	}
 

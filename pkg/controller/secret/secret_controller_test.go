@@ -44,6 +44,7 @@ func TestMain(m *testing.M) {
 	mgrOpts := manager.Options{
 		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			config.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+			options.Cache = nil
 			return client.New(config, options)
 		},
 	}
