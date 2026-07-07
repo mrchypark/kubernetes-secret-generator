@@ -9,6 +9,12 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to publish"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,6 +24,7 @@ env:
   KUBECONFIG: /tmp/kubeconfig
   GO_VERSION: 1.26.4
   IMAGE_NAME: ghcr.io/mrchypark/kubernetes-secret-generator
+  CC_TEST_REPORTER_ID: ${{ secrets.codeClimateReporterID }}
 
 jobs:
   test:
@@ -45,21 +52,18 @@ jobs:
         run: make crd
 
       - name: Hack Code Climate and Go Modules
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && env.CC_TEST_REPORTER_ID != ''
         run: mkdir -p github.com/mittwald && ln -sf "$(pwd)" github.com/mittwald/kubernetes-secret-generator
 
       - name: Test & publish code coverage
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && env.CC_TEST_REPORTER_ID != ''
         uses: paambaati/codeclimate-action@v2.7.5
-        env:
-          CC_TEST_REPORTER_ID: ${{ secrets.codeClimateReporterID }}
         with:
           coverageCommand: go test -coverprofile=c.out ./...
           debug: true
           prefix: "github.com/${{ github.repository }}/"
 
       - name: Go Test
-        if: github.event_name == 'pull_request'
         run: go test -coverprofile=c.out -coverpkg=./pkg/...  ./...
 
   build:
@@ -76,7 +80,7 @@ jobs:
     name: Deploy Latest Image
     runs-on: ubuntu-latest
     needs: ["test", "build"]
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v7
@@ -94,7 +98,7 @@ jobs:
     name: Deploy Release Image
     runs-on: ubuntu-latest
     needs: ["test", "build"]
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v7
@@ -103,12 +107,14 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Build tagged image
+        env:
+          VERSION_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
-          VERSION_TAG="${{ github.event.release.tag_name }}"
           docker build -f build/Dockerfile --build-arg VERSION="$VERSION_TAG" -t "$IMAGE_NAME:latest" -t "$IMAGE_NAME:$VERSION_TAG" .
 
       - name: Push images
+        env:
+          VERSION_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
-          VERSION_TAG="${{ github.event.release.tag_name }}"
           docker push "$IMAGE_NAME:latest"
           docker push "$IMAGE_NAME:$VERSION_TAG"
