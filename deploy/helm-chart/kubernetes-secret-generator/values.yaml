@@ -4,8 +4,8 @@ global:
   imagePullSecrets:
 
 image:
-  registry: quay.io
-  repository: mittwald/kubernetes-secret-generator
+  registry: ghcr.io
+  repository: mrchypark/kubernetes-secret-generator
   # if no tag is given, the chart's appVersion is used
   # tag: latest
   pullPolicy: Always
