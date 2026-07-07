@@ -151,6 +151,33 @@ func TestSSHKeypairGeneratorDefaultsECDSAToP256WithNilData(t *testing.T) {
 	}
 }
 
+func TestSSHKeypairGeneratorNormalizesAlgorithmBeforeDefaultLength(t *testing.T) {
+	instance := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationSSHKeyAlgorithm: " ECDSA ",
+			},
+		},
+	}
+
+	_, err := SSHKeypairGenerator{}.generateData(instance)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+
+	key, err := rawPrivateKeyFromPEM(instance.Data[SecretFieldPrivateKey])
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	privateKey, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("key type = %T, want *ecdsa.PrivateKey", key)
+	}
+	if privateKey.Curve.Params().BitSize != 256 {
+		t.Fatalf("ecdsa curve size = %d bits, want 256", privateKey.Curve.Params().BitSize)
+	}
+}
+
 func TestSSHKeypairGeneratorDefaultsGlobalECDSAToP256(t *testing.T) {
 	viper.Set("ssh-key-algorithm", SSHKeyAlgorithmECDSA)
 	t.Cleanup(func() {

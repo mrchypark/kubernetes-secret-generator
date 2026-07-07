@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -47,9 +48,9 @@ func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.R
 		return reconcile.Result{}, err
 	}
 
-	algorithm := instance.Annotations[AnnotationSSHKeyAlgorithm]
+	algorithm := normalizeSSHKeyAlgorithm(instance.Annotations[AnnotationSSHKeyAlgorithm])
 	if algorithm == "" {
-		algorithm = SSHKeyAlgorithm()
+		algorithm = normalizeSSHKeyAlgorithm(SSHKeyAlgorithm())
 	}
 	if _, ok := instance.Annotations[AnnotationSecretLength]; !ok {
 		switch algorithm {
@@ -104,10 +105,15 @@ func GenerateSSHKeypairDataWithAlgorithm(logger logr.Logger, algorithm, length s
 	return generateKeysHelper(key, privateKeyField, publicKeyField, data)
 }
 
+func normalizeSSHKeyAlgorithm(algorithm string) string {
+	return strings.ToLower(strings.TrimSpace(algorithm))
+}
+
 // generateNewPrivateKey parses the given length and generates a matching private key
 func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interface{}, error) {
+	algorithm = normalizeSSHKeyAlgorithm(algorithm)
 	if algorithm == "" {
-		algorithm = SSHKeyAlgorithm()
+		algorithm = normalizeSSHKeyAlgorithm(SSHKeyAlgorithm())
 	}
 
 	switch algorithm {
