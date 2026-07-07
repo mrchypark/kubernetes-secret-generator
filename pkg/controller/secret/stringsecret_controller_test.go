@@ -95,7 +95,7 @@ func doReconcileStringSecretController(t *testing.T, stringSecret *v1alpha1.Stri
 	rec := stringsecret.NewReconciler(mgr)
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: stringSecret.Name, Namespace: stringSecret.Namespace}}
 
-	res, err := rec.Reconcile(req)
+	res, err := rec.Reconcile(context.TODO(), req)
 
 	if isErr {
 		require.Error(t, err)

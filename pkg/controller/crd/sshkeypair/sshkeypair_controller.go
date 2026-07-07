@@ -53,7 +53,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource SSHKeyPair
-	err = c.Watch(&source.Kind{Type: &v1alpha1.SSHKeyPair{}}, &handler.EnqueueRequestForObject{}, crd.IgnoreStatusUpdatePredicate())
+	err = c.Watch(source.Kind(mgr.GetCache(), &v1alpha1.SSHKeyPair{}, &handler.TypedEnqueueRequestForObject[*v1alpha1.SSHKeyPair]{}, crd.IgnoreStatusUpdatePredicate[*v1alpha1.SSHKeyPair]()))
 	if err != nil {
 		return err
 	}
@@ -66,10 +66,9 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
-func (r *ReconcileSSHKeyPair) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+func (r *ReconcileSSHKeyPair) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	reqLogger = log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling SSSHKeyPair")
-	ctx := context.Background()
 
 	// fetch the SSHKeyPair instance
 	instance := &v1alpha1.SSHKeyPair{}
@@ -104,6 +103,7 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	}
 
 	// get config values from instance
+	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	regenerate := instance.Spec.ForceRegenerate
 	data := instance.Spec.Data
@@ -120,7 +120,7 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 
 	crd.UpdateData(data, targetSecret, regenerate)
 
-	err := secret.GenerateSSHKeypairData(reqLogger, length, regenerate, targetSecret.Data)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, regenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -137,6 +137,7 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 	values := make(map[string][]byte)
 
 	// get config values from instance
+	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	data := instance.Spec.Data
 	instancePrivateKey := []byte(instance.Spec.PrivateKey)
@@ -147,7 +148,7 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 
 	values[secret.SecretFieldPrivateKey] = instancePrivateKey
 
-	err := secret.GenerateSSHKeypairData(reqLogger, length, false, values)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, false, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}

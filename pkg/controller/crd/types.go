@@ -54,13 +54,13 @@ func CheckError(err error) (reconcile.Result, error) {
 }
 
 // IgnoreStatusUpdatePredicate is a reconciler predicate that will allow the reconciler to ignore updates that only change a cr's status
-func IgnoreStatusUpdatePredicate() predicate.Predicate {
-	return predicate.Funcs{
-		UpdateFunc: func(e event.UpdateEvent) bool {
+func IgnoreStatusUpdatePredicate[T client.Object]() predicate.TypedPredicate[T] {
+	return predicate.TypedFuncs[T]{
+		UpdateFunc: func(e event.TypedUpdateEvent[T]) bool {
 			// Ignore updates to CR status in which case metadata.Generation does not change
-			return e.MetaOld.GetGeneration() != e.MetaNew.GetGeneration()
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
 		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
+		DeleteFunc: func(e event.TypedDeleteEvent[T]) bool {
 			// Evaluates to false if the object has been confirmed deleted.
 			return !e.DeleteStateUnknown
 		},

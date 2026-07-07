@@ -23,6 +23,8 @@ spec:
           ports:
             - containerPort: 8080
               name: healthcheck
+            - containerPort: 8383
+              name: metrics
           livenessProbe:
             httpGet:
               path: /healthz
@@ -50,5 +52,7 @@ spec:
               value: "true"
             - name: SECRET_LENGTH
               value: "40"
+            - name: SSH_KEY_ALGORITHM
+              value: "rsa"
             - name: USE_METRICS_SERVICE
               value: "false"

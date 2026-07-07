@@ -11,6 +11,9 @@ import (
 // SSHKeyPairSpec defines the desired state of SSHKeyPair
 type SSHKeyPairSpec struct {
 	// +optional
+	// +kubebuilder:validation:Enum=rsa;ecdsa;ed25519
+	Algorithm string `json:"algorithm,omitempty"`
+	// +optional
 	Length string `json:"length,omitempty"`
 	// +optional
 	PrivateKey string `json:"privateKey,omitempty"`

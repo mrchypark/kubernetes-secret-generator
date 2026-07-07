@@ -100,7 +100,7 @@ func doReconcileSSHKeyPairController(t *testing.T, sshKeyPair *v1alpha1.SSHKeyPa
 	rec := sshkeypair.NewReconciler(mgr)
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: sshKeyPair.Name, Namespace: sshKeyPair.Namespace}}
 
-	res, err := rec.Reconcile(req)
+	res, err := rec.Reconcile(context.TODO(), req)
 
 	if isErr {
 		require.Error(t, err)

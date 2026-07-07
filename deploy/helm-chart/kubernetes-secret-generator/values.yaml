@@ -61,12 +61,16 @@ regenerateInsecure: "true"
 # Length of the generated secrets
 secretLength: 40
 
+# Default SSH key algorithm. Supported values: rsa, ecdsa, ed25519.
+sshKeyAlgorithm: rsa
+
 # Namespace that are watched for secret generation
 # Accepts a comma-separated list of namespaces: ns1,ns2
 # If set to "", all namespaces will be watched
 # Accessing secrets in namespaces other than the deployed one requires permissions via a cluster role (on by default)
 watchNamespace: ""
 
+# Deprecated. Metrics are served on port 8383; create Service/ServiceMonitor manifests separately.
 useMetricsService: false
 
 volumeMounts: []
@@ -82,4 +86,3 @@ rbac:
   # Set to false to restrict access to the deployed namespace only.
   # ClusterRole is deployed by Default
   clusterRole: true
-

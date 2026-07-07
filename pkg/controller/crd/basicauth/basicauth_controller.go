@@ -54,7 +54,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// Watch for changes to primary resource BasicAuth
-	err = c.Watch(&source.Kind{Type: &v1alpha1.BasicAuth{}}, &handler.EnqueueRequestForObject{}, crd.IgnoreStatusUpdatePredicate())
+	err = c.Watch(source.Kind(mgr.GetCache(), &v1alpha1.BasicAuth{}, &handler.TypedEnqueueRequestForObject[*v1alpha1.BasicAuth]{}, crd.IgnoreStatusUpdatePredicate[*v1alpha1.BasicAuth]()))
 	if err != nil {
 		return err
 	}
@@ -67,10 +67,9 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
-func (r *ReconcileBasicAuth) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+func (r *ReconcileBasicAuth) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
 	reqLogger = log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling BasicAuth")
-	ctx := context.Background()
 
 	// fetch the BasicAuth instance
 	instance := &v1alpha1.BasicAuth{}

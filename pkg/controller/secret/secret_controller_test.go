@@ -10,16 +10,13 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/flowcontrol"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -44,13 +41,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	restMapper := func(cfg *rest.Config) (meta.RESTMapper, error) {
-		return apiutil.NewDynamicRESTMapper(cfg)
-	}
-
 	mgrOpts := manager.Options{
-		MapperProvider: restMapper,
-		NewClient: func(_ cache.Cache, config *rest.Config, options client.Options) (client.Client, error) {
+		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			config.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
 			return client.New(config, options)
 		},
@@ -163,7 +155,7 @@ func doReconcile(t *testing.T, targetSecret *corev1.Secret, isErr bool) {
 	rec := secret.NewReconciler(mgr)
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: targetSecret.Name, Namespace: targetSecret.Namespace}}
 
-	res, err := rec.Reconcile(req)
+	res, err := rec.Reconcile(context.TODO(), req)
 
 	if isErr {
 		require.Error(t, err)
