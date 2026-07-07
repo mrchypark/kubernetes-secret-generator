@@ -20,8 +20,11 @@ import (
 )
 
 const (
-	SecretFieldPublicKey  = "ssh-publickey"
-	SecretFieldPrivateKey = "ssh-privatekey"
+	DefaultSecretFieldPublicKey  = "ssh-publickey"
+	DefaultSecretFieldPrivateKey = "ssh-privatekey"
+
+	SecretFieldPublicKey  = DefaultSecretFieldPublicKey
+	SecretFieldPrivateKey = DefaultSecretFieldPrivateKey
 
 	SSHKeyAlgorithmRSA     = "rsa"
 	SSHKeyAlgorithmECDSA   = "ecdsa"
@@ -59,7 +62,18 @@ func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.R
 	if instance.Data == nil {
 		instance.Data = make(map[string][]byte)
 	}
-	err = GenerateSSHKeypairDataWithAlgorithm(sg.log, algorithm, length, regenerate, instance.Data)
+
+	privateKeyField, err := GetPrivateKeyFieldFromAnnotation(DefaultSecretFieldPrivateKey, instance.Annotations)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	publicKeyField, err := GetPublicKeyFieldFromAnnotation(DefaultSecretFieldPublicKey, instance.Annotations)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	err = GenerateSSHKeypairDataWithAlgorithm(sg.log, algorithm, length, privateKeyField, publicKeyField, regenerate, instance.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -70,16 +84,16 @@ func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.R
 // generates ssh private and public key of given length
 // and writes the result to data. The public key is in authorized-keys format,
 // the private key is PEM encoded
-func GenerateSSHKeypairData(logger logr.Logger, length string, regenerate bool, data map[string][]byte) error {
-	return GenerateSSHKeypairDataWithAlgorithm(logger, SSHKeyAlgorithmRSA, length, regenerate, data)
+func GenerateSSHKeypairData(logger logr.Logger, length string, privateKeyField string, publicKeyField string, regenerate bool, data map[string][]byte) error {
+	return GenerateSSHKeypairDataWithAlgorithm(logger, SSHKeyAlgorithmRSA, length, privateKeyField, publicKeyField, regenerate, data)
 }
 
-func GenerateSSHKeypairDataWithAlgorithm(logger logr.Logger, algorithm, length string, regenerate bool, data map[string][]byte) error {
-	privateKey := data[SecretFieldPrivateKey]
-	publicKey := data[SecretFieldPublicKey]
+func GenerateSSHKeypairDataWithAlgorithm(logger logr.Logger, algorithm, length string, privateKeyField string, publicKeyField string, regenerate bool, data map[string][]byte) error {
+	privateKey := data[privateKeyField]
+	publicKey := data[publicKeyField]
 
 	if len(privateKey) > 0 && !regenerate {
-		return CheckAndRegenPublicKey(data, publicKey, privateKey)
+		return CheckAndRegenPublicKey(data, publicKey, privateKey, publicKeyField)
 	}
 
 	key, err := generateNewPrivateKey(algorithm, length, logger)
@@ -87,7 +101,7 @@ func GenerateSSHKeypairDataWithAlgorithm(logger logr.Logger, algorithm, length s
 		return err
 	}
 
-	return generateKeysHelper(key, data)
+	return generateKeysHelper(key, privateKeyField, publicKeyField, data)
 }
 
 // generateNewPrivateKey parses the given length and generates a matching private key
@@ -132,7 +146,7 @@ func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interf
 }
 
 // generateKeysHelper generates the public key from the given private key and stores the result in data
-func generateKeysHelper(key interface{}, data map[string][]byte) error {
+func generateKeysHelper(key interface{}, privateKeyField string, publicKeyField string, data map[string][]byte) error {
 	privateKeyBytes, err := pemBytesForPrivateKey(key)
 	if err != nil {
 		return err
@@ -144,8 +158,8 @@ func generateKeysHelper(key interface{}, data map[string][]byte) error {
 		return err
 	}
 
-	data[SecretFieldPublicKey] = publicKeyBytes
-	data[SecretFieldPrivateKey] = privateKeyBytes
+	data[publicKeyField] = publicKeyBytes
+	data[privateKeyField] = privateKeyBytes
 
 	return nil
 }
@@ -222,7 +236,7 @@ func SSHPublicKeyForPrivateKey(privateKey interface{}) ([]byte, error) {
 
 // CheckAndRegenPublicKey checks if the specified public key has length > 0 and regenerates it from the given private key
 // otherwise. The result is written into data
-func CheckAndRegenPublicKey(data map[string][]byte, publicKey, privateKey []byte) error {
+func CheckAndRegenPublicKey(data map[string][]byte, publicKey, privateKey []byte, publicKeyField string) error {
 	if len(publicKey) > 0 {
 		return nil
 	}
@@ -236,7 +250,7 @@ func CheckAndRegenPublicKey(data map[string][]byte, publicKey, privateKey []byte
 	if err != nil {
 		return err
 	}
-	data[SecretFieldPublicKey] = publicKey
+	data[publicKeyField] = publicKey
 
 	return nil
 }

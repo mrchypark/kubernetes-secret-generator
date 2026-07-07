@@ -20,6 +20,8 @@ const (
 	AnnotationSSHKeyAlgorithm       = "secret-generator.v1.mittwald.de/ssh-key-algorithm"
 	AnnotationBasicAuthUsername     = "secret-generator.v1.mittwald.de/basic-auth-username"
 	AnnotationSecretEncoding        = "secret-generator.v1.mittwald.de/encoding"
+	AnnotationSSHPrivateKeyField    = "secret-generator.v1.mittwald.de/private-key-field"
+	AnnotationSSHPublicKeyField     = "secret-generator.v1.mittwald.de/public-key-field"
 )
 
 type Type string

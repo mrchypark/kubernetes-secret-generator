@@ -30,7 +30,7 @@ func TestGenerateSSHKeypairDataWithAlgorithm(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := map[string][]byte{}
-			if err := GenerateSSHKeypairDataWithAlgorithm(log, tt.algorithm, tt.length, true, data); err != nil {
+			if err := GenerateSSHKeypairDataWithAlgorithm(log, tt.algorithm, tt.length, DefaultSecretFieldPrivateKey, DefaultSecretFieldPublicKey, true, data); err != nil {
 				t.Fatalf("generate keypair: %v", err)
 			}
 
@@ -50,7 +50,7 @@ func TestGenerateSSHKeypairDataWithAlgorithm(t *testing.T) {
 
 func TestGenerateSSHKeypairDataWithAlgorithmRejectsUnknownAlgorithm(t *testing.T) {
 	var log logr.Logger
-	err := GenerateSSHKeypairDataWithAlgorithm(log, "ecdsa-sk", "", true, map[string][]byte{})
+	err := GenerateSSHKeypairDataWithAlgorithm(log, "ecdsa-sk", "", DefaultSecretFieldPrivateKey, DefaultSecretFieldPublicKey, true, map[string][]byte{})
 	if err == nil {
 		t.Fatal("expected unsupported algorithm error")
 	}
@@ -111,7 +111,7 @@ func TestGenerateSSHKeypairDataWithAlgorithmTreatsByteLengthAsBits(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := map[string][]byte{}
-			if err := GenerateSSHKeypairDataWithAlgorithm(log, tt.algorithm, tt.length, true, data); err != nil {
+			if err := GenerateSSHKeypairDataWithAlgorithm(log, tt.algorithm, tt.length, DefaultSecretFieldPrivateKey, DefaultSecretFieldPublicKey, true, data); err != nil {
 				t.Fatalf("generate keypair: %v", err)
 			}
 

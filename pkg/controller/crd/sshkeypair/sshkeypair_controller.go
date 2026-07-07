@@ -107,8 +107,10 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	regenerate := instance.Spec.ForceRegenerate
 	data := instance.Spec.Data
 	instancePrivateKey := instance.Spec.PrivateKey
+	privateKeyField := instance.GetPrivateKeyField()
+	publicKeyField := instance.GetPublicKeyField()
 
-	existingPrivateKey := existing.Data[secret.SecretFieldPrivateKey]
+	existingPrivateKey := existing.Data[privateKeyField]
 
 	targetSecret := existing.DeepCopy()
 	if targetSecret.Data == nil {
@@ -119,14 +121,14 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
-		targetSecret.Data[secret.SecretFieldPrivateKey] = []byte(instancePrivateKey)
-		delete(targetSecret.Data, secret.SecretFieldPublicKey)
+		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
+		delete(targetSecret.Data, publicKeyField)
 		keyRegenerate = false
 	}
 
 	crd.UpdateData(data, targetSecret, regenerate)
 
-	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, keyRegenerate, targetSecret.Data)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, keyRegenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
@@ -147,14 +149,16 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 	length := instance.Spec.Length
 	data := instance.Spec.Data
 	instancePrivateKey := []byte(instance.Spec.PrivateKey)
+	privateKeyField := instance.GetPrivateKeyField()
+	publicKeyField := instance.GetPublicKeyField()
 
 	for key := range data {
 		values[key] = []byte(data[key])
 	}
 
-	values[secret.SecretFieldPrivateKey] = instancePrivateKey
+	values[privateKeyField] = instancePrivateKey
 
-	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, false, values)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, false, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}

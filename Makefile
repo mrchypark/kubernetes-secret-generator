@@ -1,6 +1,9 @@
-SHELL=/bin/bash
+SHELL=/usr/bin/env bash -o pipefail
 NAMESPACE=default
 KUBECONFIG=/tmp/kubeconfig
+VERSION ?= latest
+IMAGE_TAG_BASE ?= quay.io/mittwald/kubernetes-secret-generator
+IMG ?= secret-generator:${VERSION}
 
 .PHONY: install
 install: ## Install all resources (RBAC and Operator)
@@ -72,5 +75,6 @@ crd: kind
 
 .PHONY: build
 build:
+	# NOTE: This relies on the deprected operator-sdk build command (last present in 0.19)
 	operator-sdk build --go-build-args "-ldflags -X=version.Version=${SECRET_OPERATOR_VERSION}" ${DOCKER_IMAGE}
 	@exit $(.SHELLSTATUS)
