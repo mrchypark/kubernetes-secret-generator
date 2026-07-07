@@ -84,19 +84,25 @@ func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interf
 
 	switch algorithm {
 	case SSHKeyAlgorithmRSA:
-		parsedLen, _, err := ParseByteLength(SSHKeyLength(), length)
+		parsedLen, isByte, err := ParseByteLength(SSHKeyLength(), length)
 		if err != nil {
 			logger.Error(err, "could not parse length for new rsa key")
 
 			return nil, err
 		}
+		if isByte {
+			parsedLen *= 8
+		}
 		return rsa.GenerateKey(rand.Reader, parsedLen)
 	case SSHKeyAlgorithmECDSA:
-		parsedLen, _, err := ParseByteLength(256, length)
+		parsedLen, isByte, err := ParseByteLength(256, length)
 		if err != nil {
 			logger.Error(err, "could not parse length for new ecdsa key")
 
 			return nil, err
+		}
+		if isByte {
+			parsedLen *= 8
 		}
 		curve, err := ecdsaCurve(parsedLen)
 		if err != nil {
@@ -151,17 +157,17 @@ func pemBytesForPrivateKey(key interface{}) ([]byte, error) {
 	case *rsa.PrivateKey:
 		block = &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}
 	case *ecdsa.PrivateKey:
-		bytes, err := x509.MarshalECPrivateKey(key)
+		keyBytes, err := x509.MarshalECPrivateKey(key)
 		if err != nil {
 			return nil, err
 		}
-		block = &pem.Block{Type: "EC PRIVATE KEY", Bytes: bytes}
+		block = &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}
 	case ed25519.PrivateKey:
-		bytes, err := x509.MarshalPKCS8PrivateKey(key)
+		keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
 			return nil, err
 		}
-		block = &pem.Block{Type: "PRIVATE KEY", Bytes: bytes}
+		block = &pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}
 	default:
 		return nil, fmt.Errorf("unsupported private key type %T", key)
 	}

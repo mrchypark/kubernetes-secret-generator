@@ -2,6 +2,8 @@ package secret
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -48,5 +50,59 @@ func TestGenerateSSHKeypairDataWithAlgorithmRejectsUnknownAlgorithm(t *testing.T
 	err := GenerateSSHKeypairDataWithAlgorithm(log, "ecdsa-sk", "", true, map[string][]byte{})
 	if err == nil {
 		t.Fatal("expected unsupported algorithm error")
+	}
+}
+
+func TestGenerateSSHKeypairDataWithAlgorithmTreatsByteLengthAsBits(t *testing.T) {
+	var log logr.Logger
+	tests := []struct {
+		name      string
+		algorithm string
+		length    string
+		check     func(t *testing.T, key interface{})
+	}{
+		{
+			name:      "rsa",
+			algorithm: "rsa",
+			length:    "128b",
+			check: func(t *testing.T, key interface{}) {
+				privateKey, ok := key.(*rsa.PrivateKey)
+				if !ok {
+					t.Fatalf("key type = %T, want *rsa.PrivateKey", key)
+				}
+				if privateKey.N.BitLen() != 1024 {
+					t.Fatalf("rsa key length = %d bits, want 1024", privateKey.N.BitLen())
+				}
+			},
+		},
+		{
+			name:      "ecdsa",
+			algorithm: "ecdsa",
+			length:    "32b",
+			check: func(t *testing.T, key interface{}) {
+				privateKey, ok := key.(*ecdsa.PrivateKey)
+				if !ok {
+					t.Fatalf("key type = %T, want *ecdsa.PrivateKey", key)
+				}
+				if privateKey.Curve.Params().BitSize != 256 {
+					t.Fatalf("ecdsa curve size = %d bits, want 256", privateKey.Curve.Params().BitSize)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := map[string][]byte{}
+			if err := GenerateSSHKeypairDataWithAlgorithm(log, tt.algorithm, tt.length, true, data); err != nil {
+				t.Fatalf("generate keypair: %v", err)
+			}
+
+			key, err := rawPrivateKeyFromPEM(data[SecretFieldPrivateKey])
+			if err != nil {
+				t.Fatalf("parse private key: %v", err)
+			}
+			tt.check(t, key)
+		})
 	}
 }
