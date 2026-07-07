@@ -156,7 +156,7 @@ func ecdsaCurve(length int) (elliptic.Curve, error) {
 		return elliptic.P256(), nil
 	case 384:
 		return elliptic.P384(), nil
-	case 521:
+	case 521, 528:
 		return elliptic.P521(), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecdsa key length %d", length)

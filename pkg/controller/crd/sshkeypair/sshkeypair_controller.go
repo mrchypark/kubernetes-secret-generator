@@ -115,14 +115,18 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 		targetSecret.Data = make(map[string][]byte)
 	}
 
+	keyRegenerate := regenerate
+
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
 		targetSecret.Data[secret.SecretFieldPrivateKey] = []byte(instancePrivateKey)
+		delete(targetSecret.Data, secret.SecretFieldPublicKey)
+		keyRegenerate = false
 	}
 
 	crd.UpdateData(data, targetSecret, regenerate)
 
-	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, regenerate, targetSecret.Data)
+	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, keyRegenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}

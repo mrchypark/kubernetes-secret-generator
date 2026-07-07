@@ -92,6 +92,20 @@ func TestGenerateSSHKeypairDataWithAlgorithmTreatsByteLengthAsBits(t *testing.T)
 				}
 			},
 		},
+		{
+			name:      "ecdsa p521 byte length",
+			algorithm: "ecdsa",
+			length:    "66b",
+			check: func(t *testing.T, key interface{}) {
+				privateKey, ok := key.(*ecdsa.PrivateKey)
+				if !ok {
+					t.Fatalf("key type = %T, want *ecdsa.PrivateKey", key)
+				}
+				if privateKey.Curve.Params().BitSize != 521 {
+					t.Fatalf("ecdsa curve size = %d bits, want 521", privateKey.Curve.Params().BitSize)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

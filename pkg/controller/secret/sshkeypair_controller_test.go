@@ -291,6 +291,50 @@ func TestControllerRegeneratePublicKey(t *testing.T) {
 	}
 }
 
+func TestControllerRegeneratePublicKeyFromUpdatedSpecPrivateKey(t *testing.T) {
+	data := make(map[string][]byte)
+	var log logr.Logger
+	err := secret.GenerateSSHKeypairData(log, "2048", true, data)
+	require.NoError(t, err)
+
+	testSpec := v1alpha1.SSHKeyPairSpec{
+		Length: "2048",
+		Type:   string(corev1.SecretTypeOpaque),
+		Data:   map[string]string{},
+	}
+	in := newSSHKeyPairTestCR(testSpec, "")
+	require.NoError(t, mgr.GetClient().Create(context.TODO(), in))
+
+	doReconcileSSHKeyPairController(t, in, false)
+
+	require.NoError(t, mgr.GetClient().Get(context.TODO(), types.NamespacedName{
+		Name:      in.Name,
+		Namespace: in.Namespace}, in))
+
+	in.Spec.PrivateKey = string(data[secret.SecretFieldPrivateKey])
+	in.Spec.ForceRegenerate = true
+	require.NoError(t, mgr.GetClient().Update(context.TODO(), in))
+
+	doReconcileSSHKeyPairController(t, in, false)
+
+	out := &corev1.Secret{}
+	require.NoError(t, mgr.GetClient().Get(context.TODO(), types.NamespacedName{
+		Name:      in.Name,
+		Namespace: in.Namespace}, out))
+
+	if !bytes.Equal(out.Data[secret.SecretFieldPrivateKey], data[secret.SecretFieldPrivateKey]) {
+		t.Errorf("Private key was regenerated")
+	}
+
+	key, err := secret.PrivateKeyFromPEM(out.Data[secret.SecretFieldPrivateKey])
+	require.NoError(t, err)
+	publicKey, err := secret.SSHPublicKeyForPrivateKey(key)
+	require.NoError(t, err)
+	if !bytes.Equal(out.Data[secret.SecretFieldPublicKey], publicKey) {
+		t.Errorf("Public key was not regenerated from spec private key")
+	}
+}
+
 func TestControllerDoNotTouchOtherSSHSecrets(t *testing.T) {
 	secret := &corev1.Secret{
 		Type: corev1.SecretTypeOpaque,
