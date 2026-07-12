@@ -39,8 +39,11 @@ count "$promote" '^      packages: write$' 1
 count "$candidate" 'docker/build-push-action@' 1
 has "$candidate" 'platforms: linux/amd64,linux/arm64'
 has "$candidate" 'candidate-${{ github.run_id }}-${{ github.run_attempt }}'
-has "$candidate" 'docker run --rm --platform linux/amd64'
-has "$candidate" 'docker run --rm --platform linux/arm64'
+has "$candidate" 'amd64_digest=$(jq -er'
+has "$candidate" 'arm64_digest=$(jq -er'
+has "$candidate" 'printf '\''%s\n'\'' "$platform_digest" | grep -Eq '\''^sha256:[0-9a-f]{64}$'\'''
+has "$candidate" 'docker run --rm --platform linux/amd64 "$IMAGE_NAME@$amd64_digest"'
+has "$candidate" 'docker run --rm --platform linux/arm64 "$IMAGE_NAME@$arm64_digest"'
 has "$candidate" 'for arch in amd64 arm64; do'
 has "$candidate" 'anchore/grype:'
 has "$candidate" 'anchore/syft:'

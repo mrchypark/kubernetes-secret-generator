@@ -1,6 +1,6 @@
-# v4.0.0-rc.1 support status
+# v4.0.0-rc.2 support status
 
-`v4.0.0-rc.1` is a release candidate. It has no SLA, capacity, high-availability, failover,
+`v4.0.0-rc.2` is a release candidate. It has no SLA, capacity, high-availability, failover,
 or production-certification claim.
 
 | Component | Candidate target |
