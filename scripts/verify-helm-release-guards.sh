@@ -26,7 +26,7 @@ case "$1" in
 	template) printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.7.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.8.tgz"; break; fi
 			shift
 		done
 		;;
@@ -76,7 +76,10 @@ JSON
 			*) exit 71 ;;
 		esac
 		printf '%s' "$hash" >"$MOCK_SPEC_HASH"
-		printf '{"metadata":{"uid":"uid-1","resourceVersion":"10","managedFields":[{"manager":"%s","operation":"Update"}]},"spec":{}}' "${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}"
+		extra=
+		[ "${MOCK_EXTRA_MANAGER:-false}" != true ] || extra=',{"manager":"unknown-reconciler","operation":"Apply","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:spec":{}}}'
+		printf '{"metadata":{"uid":"uid-1","resourceVersion":"10","managedFields":[{"manager":"kube-apiserver","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","subresource":"status","fieldsV1":{"%s":{}}},{"manager":"%s","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:metadata":{},"f:spec":{}}}%s]},"spec":{}}' \
+			"${MOCK_STATUS_FIELD:-f:status}" "${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}" "$extra"
 		;;
 	*create\ --dry-run=client*) printf '%s' '{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"mock"},"spec":{}}' ;;
 	*replace\ --dry-run=server*) ;;
@@ -108,7 +111,7 @@ common_env() {
 	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.7 \
+		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.8 \
 		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
 }
 
@@ -188,7 +191,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.7\townNamespace\t\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.8\townNamespace\t\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -211,7 +214,7 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.7\townNamespace\t\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.8\townNamespace\t\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null
@@ -295,6 +298,25 @@ if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=tr
 	fail 'direct legacy adoption accepted Flux managedFields ownership'
 fi
 assert_no_mutation
+
+for fixture in unknown-manager status-spec-owner; do
+	rm -f "$tmpdir/spec-hash"
+	: >"$log"
+	case "$fixture" in
+		unknown-manager) set -- MOCK_EXTRA_MANAGER=true ;;
+		status-spec-owner) set -- MOCK_STATUS_FIELD=f:spec ;;
+	esac
+	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true "$@" \
+		EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+		"$repo_root/scripts/helm-release.sh" upgrade >"$tmpdir/$fixture.out" 2>&1; then
+		fail "direct legacy adoption accepted $fixture managedFields ownership"
+	fi
+	grep -F -q 'managedFields tuples are not the exact v3 client-apply plus Kubernetes status set' "$tmpdir/$fixture.out" || fail "$fixture did not emit the safe managedFields diagnostic"
+	grep -F -q '"fieldPaths"' "$tmpdir/$fixture.out" || fail "$fixture diagnostic omitted redacted field paths"
+	assert_no_mutation
+done
 rm -f "$tmpdir/spec-hash"
 : >"$log"
 common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \

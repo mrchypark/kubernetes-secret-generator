@@ -21,7 +21,7 @@ export KUBE_CONTEXT=approved-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.7
+export CHART_VERSION=4.0.0-rc.8
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -37,13 +37,13 @@ make upgrade
 When all three installed CRDs are the exact pinned v3.4.1 specs, the wrapper requires this
 fresh zero-blocker report before using a server-side dry-run and scoped ownership takeover.
 It never forces conflicts for marked v4 CRDs, partial sets, unknown schemas, Flux ownership,
-or a report for another target. At mutation time it reruns preflight, accepts only legacy
-`kubectl-client-side-apply` ownership, and replaces each exact CRD with its captured UID and
+or a report for another target. At mutation time it reruns preflight, accepts only the exact
+legacy `kubectl-client-side-apply` spec tuple plus `kube-apiserver` status tuple, and replaces each exact CRD with its captured UID and
 resourceVersion before establishing normal non-forcing SSA ownership. Concurrent changes fail
 the replacement. CRDs are updated in place and retained during manager rollback.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
-before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.7 release
+before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.8 release
 blocker. Never switch CRD managers during the controller upgrade.
 
 ## Rollback
