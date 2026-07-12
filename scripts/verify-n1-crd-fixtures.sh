@@ -9,7 +9,6 @@ trap 'rm -rf "$tmpdir"' 0 1 2 15
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
 
-command -v kubectl >/dev/null 2>&1 || fail 'kubectl is required'
 command -v jq >/dev/null 2>&1 || fail 'jq is required'
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required'
 command -v helm >/dev/null 2>&1 || fail 'helm is required'
@@ -23,11 +22,14 @@ for kind in basicauths sshkeypairs stringsecrets; do
 	[ -f "$fixture" ] || fail "missing N-1 CRD fixture: $kind"
 	lock_key=crd.v3.4.1.$kind.spec-sha256
 	expected=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
-	actual=$(kubectl create --dry-run=client -f "$fixture" -o json |
+	fixture_json=$(helm template yaml-normalizer "$repo_root/test/fixtures/yaml-normalizer" \
+		--set-file input="$fixture" --show-only templates/normalize.yaml |
+		sed -n '/^{/p')
+	actual=$(printf '%s\n' "$fixture_json" |
 		jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' |
 		openssl dgst -sha256 -r | awk '{print $1}')
 	[ "$actual" = "$expected" ] || fail "$kind fixture differs from the pinned canonical spec digest"
-	webhook_hash=$(kubectl create --dry-run=client -f "$fixture" -o json |
+	webhook_hash=$(printf '%s\n' "$fixture_json" |
 		jq -Sc '.spec | .conversion={strategy:"Webhook",webhook:{conversionReviewVersions:["v1"],clientConfig:{url:"https://invalid.example"}}} | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' |
 		openssl dgst -sha256 -r | awk '{print $1}')
 	[ "$webhook_hash" != "$expected" ] || fail "$kind normalization erased a non-default conversion strategy"
