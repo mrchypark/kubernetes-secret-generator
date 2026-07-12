@@ -75,6 +75,7 @@ for contract in \
 	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
 	'replace --field-manager=kubernetes-secret-generator-crd-manager' \
 	'compatibilityProfile=$profile' \
+	'.metadata.ownerReferences[0].blockOwnerDeletion == true' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
@@ -90,9 +91,9 @@ baseline=$(inventory <<'EOF'
   {"kind":"StringSecret","metadata":{"name":"smoke-string","uid":"cr-string"}},
   {"kind":"BasicAuth","metadata":{"name":"smoke-basic","uid":"cr-basic"}},
   {"kind":"SSHKeyPair","metadata":{"name":"smoke-ssh","uid":"cr-ssh"}},
-  {"kind":"Secret","metadata":{"name":"smoke-string","uid":"secret-string","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"StringSecret","name":"smoke-string","uid":"cr-string","controller":true}]}},
-  {"kind":"Secret","metadata":{"name":"smoke-basic","uid":"secret-basic","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"BasicAuth","name":"smoke-basic","uid":"cr-basic","controller":true}]}},
-  {"kind":"Secret","metadata":{"name":"smoke-ssh","uid":"secret-ssh","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"SSHKeyPair","name":"smoke-ssh","uid":"cr-ssh","controller":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-string","uid":"secret-string","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"StringSecret","name":"smoke-string","uid":"cr-string","controller":true,"blockOwnerDeletion":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-basic","uid":"secret-basic","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"BasicAuth","name":"smoke-basic","uid":"cr-basic","controller":true,"blockOwnerDeletion":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-ssh","uid":"secret-ssh","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"SSHKeyPair","name":"smoke-ssh","uid":"cr-ssh","controller":true,"blockOwnerDeletion":true}]}},
   {"kind":"Secret","metadata":{"name":"smoke-annotation","uid":"secret-annotation"}}
 ]}
 EOF
@@ -100,13 +101,16 @@ EOF
 with_unrelated=$(printf '%s\n' "$baseline" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}}) + [
   {kind:"Secret",metadata:{name:"sh.helm.release.v1.ksg-release.v3",uid:"helm-history"}},
   {kind:"Secret",metadata:{name:"unrelated",uid:"unrelated"}},
+  {kind:"Secret",metadata:{name:"smoke-unrelated",uid:"smoke-unrelated"}},
   {kind:"ConfigMap",metadata:{name:"smoke-config",uid:"unrelated-config"}}
 ]}' | inventory)
 [ "$with_unrelated" = "$baseline" ] || fail 'fixture inventory includes Helm history or unrelated objects'
 missing=$(printf '%s\n' "$baseline" | jq 'del(.[] | select(.kind == "Secret" and .name == "smoke-basic"))')
 [ "$(printf '%s\n' "$missing" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored managed fixture loss'
-added=$(printf '%s\n' "$baseline" | jq '. + [{kind:"Secret",name:"smoke-extra",uid:"secret-extra",owners:[]}]')
+added=$(printf '%s\n' "$baseline" | jq '. + [{kind:"Secret",name:"owned-extra",uid:"secret-extra",owners:[{apiVersion:"secretgenerator.mittwald.de/v1alpha1",kind:"StringSecret",name:"smoke-string",uid:"cr-string",controller:true,blockOwnerDeletion:true}]}]')
 [ "$(printf '%s\n' "$added" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored managed fixture addition'
+owner_changed=$(printf '%s\n' "$baseline" | jq '(.[] | select(.kind == "Secret" and .name == "smoke-basic") | .owners[0].blockOwnerDeletion) = false')
+[ "$(printf '%s\n' "$owner_changed" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored blockOwnerDeletion change'
 preflight_line=$(grep -n -F 'adoption_preflight=$workdir/adoption-preflight.json' "$release" | cut -d: -f1)
 identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$release" | cut -d: -f1)
 replace_line=$(grep -n -F 'replace --field-manager=kubernetes-secret-generator-crd-manager -f' "$release" | cut -d: -f1)

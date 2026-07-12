@@ -217,7 +217,8 @@ assert_owner() {
 		(.metadata.ownerReferences | length) == 1 and
 		.metadata.ownerReferences[0].uid == $uid and
 		.metadata.ownerReferences[0].kind == $kind and
-		.metadata.ownerReferences[0].controller == true' >/dev/null || fail "exact owner mismatch for $name"
+		.metadata.ownerReferences[0].controller == true and
+		.metadata.ownerReferences[0].blockOwnerDeletion == true' >/dev/null || fail "exact owner mismatch for $name"
 }
 assert_owners() {
 	assert_owner stringsecret smoke-string StringSecret
