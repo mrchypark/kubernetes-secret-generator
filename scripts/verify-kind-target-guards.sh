@@ -5,6 +5,7 @@ repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 foundation=$repo_root/test/e2e/kind-foundation.sh
 release=$repo_root/test/e2e/release-smoke.sh
 benchmark=$repo_root/test/e2e/benchmark.sh
+inventory_filter=$repo_root/test/e2e/release-smoke-inventory.jq
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
 
@@ -74,11 +75,46 @@ for contract in \
 	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
 	'replace --field-manager=kubernetes-secret-generator-crd-manager' \
 	'compatibilityProfile=$profile' \
+	'.metadata.ownerReferences[0].blockOwnerDeletion == true' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+grep -F -q 'jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"' "$release" || fail 'release smoke does not use the managed fixture inventory filter'
+grep -F -q "manager rollback changed managed fixture identity or ownership" "$release" || fail 'release smoke fixture rollback assertion is missing'
+! grep -F -q 'manager rollback changed object counts' "$release" || fail 'release smoke still counts unrelated namespace objects'
+
+inventory() { jq -cS -f "$inventory_filter"; }
+baseline=$(inventory <<'EOF'
+{"items":[
+  {"kind":"StringSecret","metadata":{"name":"smoke-string","uid":"cr-string"}},
+  {"kind":"BasicAuth","metadata":{"name":"smoke-basic","uid":"cr-basic"}},
+  {"kind":"SSHKeyPair","metadata":{"name":"smoke-ssh","uid":"cr-ssh"}},
+  {"kind":"Secret","metadata":{"name":"smoke-string","uid":"secret-string","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"StringSecret","name":"smoke-string","uid":"cr-string","controller":true,"blockOwnerDeletion":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-basic","uid":"secret-basic","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"BasicAuth","name":"smoke-basic","uid":"cr-basic","controller":true,"blockOwnerDeletion":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-ssh","uid":"secret-ssh","ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"SSHKeyPair","name":"smoke-ssh","uid":"cr-ssh","controller":true,"blockOwnerDeletion":true}]}},
+  {"kind":"Secret","metadata":{"name":"smoke-annotation","uid":"secret-annotation"}}
+]}
+EOF
+)
+with_unrelated=$(printf '%s\n' "$baseline" | jq '{items: (map({kind,metadata:{name,uid,ownerReferences:.owners}}) + [
+  {kind:"Secret",metadata:{name:"sh.helm.release.v1.ksg-release.v3",uid:"helm-history"}},
+  {kind:"Secret",metadata:{name:"unrelated",uid:"unrelated"}},
+  {kind:"Secret",metadata:{name:"smoke-unrelated",uid:"smoke-unrelated"}},
+  {kind:"ConfigMap",metadata:{name:"smoke-config",uid:"unrelated-config"}}
+])}' | inventory)
+[ "$with_unrelated" = "$baseline" ] || fail 'fixture inventory includes Helm history or unrelated objects'
+missing=$(printf '%s\n' "$baseline" | jq 'del(.[] | select(.kind == "Secret" and .name == "smoke-basic"))')
+[ "$(printf '%s\n' "$missing" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored managed fixture loss'
+added=$(printf '%s\n' "$baseline" | jq '. + [{kind:"Secret",name:"owned-extra",uid:"secret-extra",owners:[{apiVersion:"secretgenerator.mittwald.de/v1alpha1",kind:"StringSecret",name:"smoke-string",uid:"cr-string",controller:true,blockOwnerDeletion:true}]}]')
+[ "$(printf '%s\n' "$added" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored managed fixture addition'
+added_noncontroller=$(printf '%s\n' "$baseline" | jq '. + [{kind:"Secret",name:"owned-noncontroller",uid:"secret-noncontroller",owners:[{apiVersion:"secretgenerator.mittwald.de/v1alpha1",kind:"StringSecret",name:"smoke-string",uid:"cr-string",controller:false,blockOwnerDeletion:true}]}]')
+[ "$(printf '%s\n' "$added_noncontroller" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored non-controller fixture owner reference'
+added_implicit_owner=$(printf '%s\n' "$baseline" | jq '. + [{kind:"Secret",name:"owned-implicit",uid:"secret-implicit",owners:[{apiVersion:"secretgenerator.mittwald.de/v1alpha1",kind:"StringSecret",name:"smoke-string",uid:"cr-string",blockOwnerDeletion:true}]}]')
+[ "$(printf '%s\n' "$added_implicit_owner" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored implicit non-controller fixture owner reference'
+owner_changed=$(printf '%s\n' "$baseline" | jq '(.[] | select(.kind == "Secret" and .name == "smoke-basic") | .owners[0].blockOwnerDeletion) = false')
+[ "$(printf '%s\n' "$owner_changed" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored blockOwnerDeletion change'
 preflight_line=$(grep -n -F 'adoption_preflight=$workdir/adoption-preflight.json' "$release" | cut -d: -f1)
 identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$release" | cut -d: -f1)
 replace_line=$(grep -n -F 'replace --field-manager=kubernetes-secret-generator-crd-manager -f' "$release" | cut -d: -f1)

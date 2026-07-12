@@ -188,6 +188,23 @@ for name in smoke-string smoke-basic smoke-ssh smoke-annotation; do wait_secret 
 k -n "$namespace" annotate secret smoke-string secret-generator.v1.mittwald.de/secure=yes --overwrite >/dev/null
 [ "$(k -n "$namespace" get secret smoke-string -o jsonpath='{.metadata.annotations.secret-generator\.v1\.mittwald\.de/secure}')" = yes ] || fail 'v3 StringSecret secure provenance marker was not established'
 secret_hash() { k -n "$namespace" get secret "$1" -o json | jq -cS .data | digest; }
+fixture_inventory() {
+	k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json |
+		jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"
+}
+assert_fixture_inventory() {
+	printf '%s\n' "$1" | jq -e '
+		map({kind, name}) == [
+			{kind:"BasicAuth",name:"smoke-basic"},
+			{kind:"SSHKeyPair",name:"smoke-ssh"},
+			{kind:"Secret",name:"smoke-annotation"},
+			{kind:"Secret",name:"smoke-basic"},
+			{kind:"Secret",name:"smoke-ssh"},
+			{kind:"Secret",name:"smoke-string"},
+			{kind:"StringSecret",name:"smoke-string"}
+		] and all(.[]; (.uid | type == "string" and length > 0))' >/dev/null ||
+		fail 'managed fixture inventory has unexpected identities'
+}
 string_hash=$(secret_hash smoke-string)
 basic_hash=$(secret_hash smoke-basic)
 ssh_hash=$(secret_hash smoke-ssh)
@@ -200,7 +217,8 @@ assert_owner() {
 		(.metadata.ownerReferences | length) == 1 and
 		.metadata.ownerReferences[0].uid == $uid and
 		.metadata.ownerReferences[0].kind == $kind and
-		.metadata.ownerReferences[0].controller == true' >/dev/null || fail "exact owner mismatch for $name"
+		.metadata.ownerReferences[0].controller == true and
+		.metadata.ownerReferences[0].blockOwnerDeletion == true' >/dev/null || fail "exact owner mismatch for $name"
 }
 assert_owners() {
 	assert_owner stringsecret smoke-string StringSecret
@@ -382,10 +400,12 @@ sleep 5
 basic_hash=$healed_hash
 
 crd_hash=$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)
-counts=$(k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json | jq -c '[.items|group_by(.kind)|map({(.[0].kind):length})|add]')
+fixtures=$(fixture_inventory)
+assert_fixture_inventory "$fixtures"
 upgrade_manager v3.4.1 "$v3_local_image" true
 [ "$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)" = "$crd_hash" ] || fail 'manager rollback changed v4 CRDs'
-[ "$(k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json | jq -c '[.items|group_by(.kind)|map({(.[0].kind):length})|add]')" = "$counts" ] || fail 'manager rollback changed object counts'
+[ "$(fixture_inventory)" = "$fixtures" ] || fail 'manager rollback changed managed fixture identity or ownership'
+assert_owners
 [ "$(secret_hash smoke-string)" = "$string_hash" ] || fail 'manager rollback rotated StringSecret'
 [ "$(secret_hash smoke-basic)" = "$basic_hash" ] || fail 'manager rollback rotated BasicAuth'
 [ "$(secret_hash smoke-ssh)" = "$ssh_hash" ] || fail 'manager rollback rotated SSHKeyPair'
