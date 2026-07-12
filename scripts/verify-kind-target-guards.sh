@@ -49,6 +49,11 @@ for contract in \
 	'sleep 900' \
 	'pod-security.kubernetes.io/warn=restricted' \
 	'V3_COMPAT_IMAGE differs from the locked amd64 v3.4.1 image' \
+	'candidate local tag does not match exact candidate image ID' \
+	'v3 local tag does not match exact v3 image ID' \
+	'kind load docker-image "$v3_local_image"' \
+	'kind load docker-image "$candidate_local_image"' \
+	'--set-string image.digest=' \
 	'--set image.pullPolicy=IfNotPresent' \
 	'v3_install_diagnostics' \
 	'"$repo_root/scripts/preflight-v4.sh"' \
@@ -58,6 +63,9 @@ for contract in \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+if grep -E 'kind load docker-image.*\$(CANDIDATE_IMAGE|V3_COMPAT_IMAGE)' "$release" >/dev/null; then
+	fail 'release smoke must not kind-load digest references directly'
+fi
 if grep -F -q 'pod-security.kubernetes.io/enforce=restricted' "$release"; then
 	fail 'release smoke must not enforce restricted Pod Security before the legacy v3 upgrade'
 fi

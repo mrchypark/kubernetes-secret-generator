@@ -1,4 +1,4 @@
-# Replace both zero digests with the immutable v4.0.0-rc.4 candidate before use.
+# Replace both zero digests with the immutable v4.0.0-rc.5 candidate before use.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
