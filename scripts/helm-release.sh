@@ -281,6 +281,8 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 	command -v jq >/dev/null 2>&1 || fail 'jq is required to verify legacy CRD identity'
 	command -v openssl >/dev/null 2>&1 || fail 'openssl is required to verify legacy CRD identity'
 	validate_legacy_preflight
+	legacy_live_dir=$tmpdir/legacy-live
+	mkdir "$legacy_live_dir"
 	for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 		case "$crd" in
 			basicauths.*) lock_key=crd.v3.4.1.basicauths.spec-sha256 ;;
@@ -288,8 +290,14 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			stringsecrets.*) lock_key=crd.v3.4.1.stringsecrets.spec-sha256 ;;
 		esac
 		expected_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
-		actual_spec_sha=$(kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" -o json |
-			jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' |
+		live_crd=$legacy_live_dir/$crd.json
+		kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" -o json >"$live_crd"
+		jq -e '(.metadata.managedFields // []) as $fields |
+			($fields | length) > 0 and all($fields[]; .manager == "kubectl-client-side-apply" and .operation == "Update")' \
+			"$live_crd" >/dev/null || fail "$crd has a legacy field manager other than kubectl-client-side-apply; refusing direct ownership takeover"
+		jq -e '.metadata.uid != null and .metadata.uid != "" and .metadata.resourceVersion != null and .metadata.resourceVersion != ""' \
+			"$live_crd" >/dev/null || fail "$crd lacks UID/resourceVersion concurrency evidence"
+		actual_spec_sha=$(jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' "$live_crd" |
 			openssl dgst -sha256 -r | awk '{print $1}')
 		[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd is unmarked but does not match the pinned v3.4.1 CRD spec"
 	done
@@ -338,11 +346,33 @@ for crd_file in "$chart_dir"/crds/*_crd.yaml; do
 done >"$canonical_crds"
 cmp -s "$canonical_crds" "$crd_bundle" || fail 'packaged chart CRDs differ from the canonical generated CRDs'
 
-set -- kubectl --context "$KUBE_CONTEXT" apply --server-side \
-	--field-manager kubernetes-secret-generator-crd-manager
-[ "$adopt_legacy_crds" = false ] || set -- "$@" --force-conflicts
-"$@" --dry-run=server --filename "$crd_bundle" >/dev/null
-"$@" --filename "$crd_bundle"
+if [ "$adopt_legacy_crds" = true ]; then
+	current_preflight=$tmpdir/current-preflight.json
+	CONFIRM_CONTEXT="$KUBE_CONTEXT" EXPECTED_SERVER_URL="$server" EXPECTED_CA_SHA256="$ca_sha" \
+		DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-$RELEASE_NAME}" \
+		SCOPE_MODE="$SCOPE_MODE" CONFIRMED_SCOPE="$CONFIRMED_SCOPE" \
+		SCOPE_NAMESPACES="${SCOPE_NAMESPACES:-}" CONFIRMED_NAMESPACES_SHA256="${CONFIRMED_NAMESPACES_SHA256:-}" \
+		"$repo_root/scripts/preflight-v4.sh" >"$current_preflight" || fail 'immediate legacy-adoption preflight reported blockers or an unstable snapshot'
+	[ "$(jq -r '.blockerCount' "$current_preflight")" -eq 0 ] || fail 'immediate legacy-adoption preflight reported blockers'
+	for crd_file in "$chart_dir"/crds/*_crd.yaml; do
+		crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
+		live_crd=$legacy_live_dir/$crd.json
+		[ -f "$live_crd" ] || fail "packaged target contains an unexpected CRD: $crd"
+		uid=$(jq -er '.metadata.uid' "$live_crd")
+		resource_version=$(jq -er '.metadata.resourceVersion' "$live_crd")
+		target_crd=$tmpdir/target-$crd.json
+		kubectl --context "$KUBE_CONTEXT" create --dry-run=client --filename "$crd_file" --output json |
+			jq --arg uid "$uid" --arg rv "$resource_version" '.metadata.uid=$uid | .metadata.resourceVersion=$rv' >"$target_crd"
+		kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null
+		kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd"
+		kubectl --context "$KUBE_CONTEXT" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "$crd_file" >/dev/null
+	done
+else
+	kubectl --context "$KUBE_CONTEXT" apply --server-side --dry-run=server \
+		--field-manager kubernetes-secret-generator-crd-manager --filename "$crd_bundle" >/dev/null
+	kubectl --context "$KUBE_CONTEXT" apply --server-side \
+		--field-manager kubernetes-secret-generator-crd-manager --filename "$crd_bundle"
+fi
 for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 	kubectl --context "$KUBE_CONTEXT" wait --for=condition=Established --timeout=60s "customresourcedefinition/$crd"
 	case "$crd" in

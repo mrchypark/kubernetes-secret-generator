@@ -37,7 +37,10 @@ make upgrade
 When all three installed CRDs are the exact pinned v3.4.1 specs, the wrapper requires this
 fresh zero-blocker report before using a server-side dry-run and scoped ownership takeover.
 It never forces conflicts for marked v4 CRDs, partial sets, unknown schemas, Flux ownership,
-or a report for another target. CRDs are updated in place and retained during manager rollback.
+or a report for another target. At mutation time it reruns preflight, accepts only legacy
+`kubectl-client-side-apply` ownership, and replaces each exact CRD with its captured UID and
+resourceVersion before establishing normal non-forcing SSA ownership. Concurrent changes fail
+the replacement. CRDs are updated in place and retained during manager rollback.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
 before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.7 release

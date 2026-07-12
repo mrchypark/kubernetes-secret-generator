@@ -232,6 +232,8 @@ grep -F -x -q -- '- Blockers: **0**' "$preflight_report" || fail 'read-only v4 p
 
 # A v3.4.1 client-side apply owns the CRD version list. Take over only after
 # the zero-blocker preflight and exact normalized v3 spec verification.
+legacy_live_dir=$workdir/legacy-live
+mkdir "$legacy_live_dir"
 for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 	case "$crd" in
 		basicauths.*) lock_key=crd.v3.4.1.basicauths.spec-sha256 ;;
@@ -239,16 +241,38 @@ for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mi
 		stringsecrets.*) lock_key=crd.v3.4.1.stringsecrets.spec-sha256 ;;
 	esac
 	expected_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
-	actual_spec_sha=$(k get "customresourcedefinition/$crd" -o json |
-		jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' |
+	live_crd=$legacy_live_dir/$crd.json
+	k get "customresourcedefinition/$crd" -o json >"$live_crd"
+	jq -e '(.metadata.managedFields // []) as $fields |
+		($fields | length) > 0 and all($fields[]; .manager == "kubectl-client-side-apply" and .operation == "Update")' \
+		"$live_crd" >/dev/null || fail "$crd has an unexpected legacy field manager"
+	jq -e '.metadata.uid != null and .metadata.uid != "" and .metadata.resourceVersion != null and .metadata.resourceVersion != ""' \
+		"$live_crd" >/dev/null || fail "$crd lacks UID/resourceVersion concurrency evidence"
+	actual_spec_sha=$(jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' "$live_crd" |
 		openssl dgst -sha256 -r | awk '{print $1}')
 	[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd does not match the pinned v3.4.1 CRD spec before ownership takeover"
 done
 
 crds=$workdir/v4-crds.yaml
 helm show crds "$CHART_TGZ" >"$crds"
-k apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager --dry-run=server -f "$crds" >/dev/null
-k apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager -f "$crds" >/dev/null
+adoption_preflight=$workdir/adoption-preflight.json
+KUBECONFIG="$kubeconfig" KUBE_CONTEXT="$context" CONFIRM_CONTEXT="$context" \
+	EXPECTED_SERVER_URL="$server" EXPECTED_CA_SHA256="$ca_sha" NAMESPACE="$namespace" \
+	RELEASE_NAME="$release" DEPLOYMENT_NAME="$deployment" SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
+	"$repo_root/scripts/preflight-v4.sh" >"$adoption_preflight" || fail 'immediate legacy-adoption preflight reported blockers or an unstable snapshot'
+[ "$(jq -r '.blockerCount' "$adoption_preflight")" -eq 0 ] || fail 'immediate legacy-adoption preflight reported blockers'
+for crd_file in "$repo_root"/deploy/helm-chart/kubernetes-secret-generator/crds/*_crd.yaml; do
+	crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
+	live_crd=$legacy_live_dir/$crd.json
+	uid=$(jq -er '.metadata.uid' "$live_crd")
+	resource_version=$(jq -er '.metadata.resourceVersion' "$live_crd")
+	target_crd=$workdir/target-$crd.json
+	k create --dry-run=client -f "$crd_file" -o json |
+		jq --arg uid "$uid" --arg rv "$resource_version" '.metadata.uid=$uid | .metadata.resourceVersion=$rv' >"$target_crd"
+	k replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager -f "$target_crd" >/dev/null
+	k replace --field-manager=kubernetes-secret-generator-crd-manager -f "$target_crd" >/dev/null
+	k apply --server-side --field-manager=kubernetes-secret-generator-crd-manager -f "$crd_file" >/dev/null
+done
 k wait --for=condition=Established --timeout=60s \
 	crd/basicauths.secretgenerator.mittwald.de \
 	crd/sshkeypairs.secretgenerator.mittwald.de \
