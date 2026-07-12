@@ -101,7 +101,7 @@ case "$ca_sha" in ??????????????????????????????????????????????????????????????
 k label namespace kube-system "ksg-test-owner=$run_id" --overwrite >/dev/null
 [ "$(k get namespace kube-system -o jsonpath='{.metadata.labels.ksg-test-owner}')" = "$run_id" ] || fail 'cluster owner sentinel was not established'
 k create namespace "$namespace" >/dev/null
-k label namespace "$namespace" "ksg-test-owner=$run_id" pod-security.kubernetes.io/enforce=restricted >/dev/null
+k label namespace "$namespace" "ksg-test-owner=$run_id" pod-security.kubernetes.io/warn=restricted >/dev/null
 [ "$(k get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')" = amd64 ] || fail 'kind node is not amd64'
 kind load docker-image "$V3_COMPAT_IMAGE" --name "$cluster" >/dev/null
 kind load docker-image "$CANDIDATE_IMAGE" --name "$cluster" >/dev/null

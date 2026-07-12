@@ -47,6 +47,7 @@ for contract in \
 	'case "$server" in https://127.0.0.1:' \
 	'ksg-test-owner=$run_id' \
 	'sleep 900' \
+	'pod-security.kubernetes.io/warn=restricted' \
 	'V3_COMPAT_IMAGE differs from the locked amd64 v3.4.1 image' \
 	'"$repo_root/scripts/preflight-v4.sh"' \
 	'compatibilityProfile=$profile' \
@@ -55,6 +56,9 @@ for contract in \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+if grep -F -q 'pod-security.kubernetes.io/enforce=restricted' "$release"; then
+	fail 'release smoke must not enforce restricted Pod Security before the legacy v3 upgrade'
+fi
 
 # shellcheck disable=SC2016 # These are literal source contracts.
 for contract in \
