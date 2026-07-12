@@ -75,8 +75,13 @@ jobs:
           test "$(docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" --format '{{.Manifest.Digest}}')" = "$DIGEST"
           docker buildx imagetools inspect "$IMAGE_NAME@$DIGEST" --raw >image-platforms.json
           jq -e '[.manifests[] | select(.platform.os == "linux") | (.platform.os + "/" + .platform.architecture)] | sort == ["linux/amd64", "linux/arm64"]' image-platforms.json >/dev/null
-          docker run --rm --platform linux/amd64 "$IMAGE_NAME@$DIGEST" --help >/dev/null
-          docker run --rm --platform linux/arm64 "$IMAGE_NAME@$DIGEST" --help >/dev/null
+          amd64_digest=$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' image-platforms.json)
+          arm64_digest=$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' image-platforms.json)
+          for platform_digest in "$amd64_digest" "$arm64_digest"; do
+            printf '%s\n' "$platform_digest" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          done
+          docker run --rm --platform linux/amd64 "$IMAGE_NAME@$amd64_digest" --help >/dev/null
+          docker run --rm --platform linux/arm64 "$IMAGE_NAME@$arm64_digest" --help >/dev/null
           printf '%s\n' "$DIGEST" >image-digest.txt
 
       - name: Scan and create an SBOM for each architecture

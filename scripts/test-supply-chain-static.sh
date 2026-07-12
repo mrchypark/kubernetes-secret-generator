@@ -31,6 +31,7 @@ extra_workflow() { printf 'jobs: {}\n' >"$1/.github/workflows/extra.yml"; }
 unpinned_action() { sed -i.bak 's/@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0/@v7/' "$1/.github/workflows/ci.yml"; }
 ci_write() { sed -i.bak 's/contents: read/contents: write/' "$1/.github/workflows/ci.yml"; }
 wrong_platforms() { sed -i.bak 's#platforms: linux/amd64,linux/arm64#platforms: linux/amd64#' "$1/.github/workflows/release-candidate.yml"; }
+top_level_startup_digest() { sed -i.bak 's/@$amd64_digest/@$DIGEST/' "$1/.github/workflows/release-candidate.yml"; }
 auto_promote() { sed -i.bak 's/workflow_dispatch:/push:/' "$1/.github/workflows/release-promote.yml"; }
 missing_concurrency() { sed -i.bak '/group: promote-/d' "$1/.github/workflows/release-promote.yml"; }
 promotion_rebuild() { awk '{print} /scripts\/validate-release.sh/{print "          helm package deploy/helm-chart/kubernetes-secret-generator"}' "$1/.github/workflows/release-promote.yml" >"$1/workflow.tmp" && mv "$1/workflow.tmp" "$1/.github/workflows/release-promote.yml"; }
@@ -41,6 +42,7 @@ reject extra-workflow extra_workflow
 reject unpinned-action unpinned_action
 reject ci-write ci_write
 reject wrong-platforms wrong_platforms
+reject top-level-startup-digest top_level_startup_digest
 reject auto-promote auto_promote
 reject missing-concurrency missing_concurrency
 reject promotion-rebuild promotion_rebuild
