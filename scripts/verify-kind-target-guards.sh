@@ -61,12 +61,24 @@ for contract in \
 	'"$repo_root/scripts/preflight-v4.sh"' \
 	'REPORT_FORMAT=markdown REPORT_FILE="$preflight_report"' \
 	'read-only v4 preflight failed; sanitized report follows' \
+	'crd.v3.4.1.basicauths.spec-sha256' \
+	'does not match the pinned v3.4.1 CRD spec before ownership takeover' \
+	'.manager == "kubectl-client-side-apply" and .operation == "Update"' \
+	'.metadata.resourceVersion' \
+	'immediate legacy-adoption preflight reported blockers or an unstable snapshot' \
+	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
+	'replace --field-manager=kubernetes-secret-generator-crd-manager' \
 	'compatibilityProfile=$profile' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+preflight_line=$(grep -n -F 'adoption_preflight=$workdir/adoption-preflight.json' "$release" | cut -d: -f1)
+identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$release" | cut -d: -f1)
+replace_line=$(grep -n -F 'replace --field-manager=kubernetes-secret-generator-crd-manager -f' "$release" | cut -d: -f1)
+[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$replace_line" ] || fail 'legacy CRD replacement is not gated by exact identity and immediate preflight'
+! grep -F -q -- '--force-conflicts' "$release" || fail 'release smoke must not force CRD field conflicts'
 if grep -E 'kind load docker-image.*\$(CANDIDATE_IMAGE|V3_COMPAT_IMAGE)' "$release" >/dev/null; then
 	fail 'release smoke must not kind-load digest references directly'
 fi

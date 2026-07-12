@@ -7,6 +7,7 @@ trap 'rm -rf "$tmpdir"' 0 1 2 15
 mkdir "$tmpdir/bin"
 log=$tmpdir/calls.log
 digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+real_openssl=$(command -v openssl)
 
 fail() {
 	printf 'error: %s\n' "$*" >&2
@@ -25,7 +26,7 @@ case "$1" in
 	template) printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.6.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.7.tgz"; break; fi
 			shift
 		done
 		;;
@@ -56,6 +57,30 @@ case "$*" in
 			printf 'false\tnode-a\tTrue\t\nfalse\tnode-b\tTrue\t\n'
 		fi
 		;;
+	*get\ deployment*) printf '%s' '{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"ksg","namespace":"ksg-system","uid":"deployment-uid","resourceVersion":"1"},"spec":{"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"WATCH_NAMESPACE","value":"ksg-system"}]}]}}}}' ;;
+	*get\ stringsecrets.secretgenerator.mittwald.de,basicauths.secretgenerator.mittwald.de,sshkeypairs.secretgenerator.mittwald.de,secrets*) printf '%s' '{"apiVersion":"v1","kind":"List","items":[]}' ;;
+	*get\ customresourcedefinitions.apiextensions.k8s.io*) cat <<'JSON'
+{"apiVersion":"v1","kind":"List","items":[
+{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"basicauths.secretgenerator.mittwald.de"},"spec":{"versions":[{"name":"v1alpha1","served":true,"storage":true,"subresources":{"status":{}},"schema":{"openAPIV3Schema":{"properties":{"spec":{"properties":{}},"status":{"properties":{"conditions":{},"observedGeneration":{}}}}}}}]}},
+{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"sshkeypairs.secretgenerator.mittwald.de"},"spec":{"versions":[{"name":"v1alpha1","served":true,"storage":true,"subresources":{"status":{}},"schema":{"openAPIV3Schema":{"properties":{"spec":{"properties":{"algorithm":{},"privateKey":{},"privateKeyField":{},"publicKeyField":{}}},"status":{"properties":{"conditions":{},"observedGeneration":{}}}}}}}]}},
+{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"stringsecrets.secretgenerator.mittwald.de"},"spec":{"versions":[{"name":"v1alpha1","served":true,"storage":true,"subresources":{"status":{}},"schema":{"openAPIV3Schema":{"properties":{"spec":{"properties":{}},"status":{"properties":{"conditions":{},"observedGeneration":{}}}}}}}]}}
+]}
+JSON
+		;;
+	*get\ stringsecrets.secretgenerator.mittwald.de\ -A*|*get\ basicauths.secretgenerator.mittwald.de\ -A*|*get\ sshkeypairs.secretgenerator.mittwald.de\ -A*|*get\ secrets\ -A*) printf '%s' '{"apiVersion":"v1","kind":"List","items":[]}' ;;
+	*' -o json')
+		case "$*" in
+			*customresourcedefinition/basicauths.*) hash=6d90f44c610fe07c51aa729946c8368296d1bfe8bea2bb098cbd85c3a36c59f5 ;;
+			*customresourcedefinition/sshkeypairs.*) hash=2a366ddc189823995403b2fb1b278387a108478686adfde7096586a276b42ddf ;;
+			*customresourcedefinition/stringsecrets.*) hash=569acb9a3ff0dac64254fc72dd276b3ae29c7947da92c08120e18ccba8827871 ;;
+			*) exit 71 ;;
+		esac
+		printf '%s' "$hash" >"$MOCK_SPEC_HASH"
+		printf '{"metadata":{"uid":"uid-1","resourceVersion":"10","managedFields":[{"manager":"%s","operation":"Update"}]},"spec":{}}' "${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}"
+		;;
+	*create\ --dry-run=client*) printf '%s' '{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"mock"},"spec":{}}' ;;
+	*replace\ --dry-run=server*) ;;
+	*replace\ --field-manager*) [ "${MOCK_REPLACE_CONFLICT:-false}" != true ] ;;
 	*apply\ --server-side*) [ "${MOCK_SSA_CONFLICT:-false}" != true ] ;;
 	*wait\ --for=condition=Established*) ;;
 	*get\ customresourcedefinition/basicauths.*) printf string ;;
@@ -64,13 +89,26 @@ case "$*" in
 	*) exit 71 ;;
 esac
 EOF
-chmod +x "$tmpdir/bin/helm" "$tmpdir/bin/kubectl"
+cat >"$tmpdir/bin/openssl" <<'EOF'
+#!/bin/sh
+if [ "${MOCK_LEGACY_MATCH:-false}" = true ] && [ "$#" -eq 3 ] && [ "$1" = dgst ] && [ "$3" = -r ]; then
+	payload=$(cat)
+	if [ ! -s "$MOCK_SPEC_HASH" ] || [ "$payload" = test-ca ]; then
+		printf '%s' "$payload" | "$REAL_OPENSSL" "$@"
+		exit $?
+	fi
+	printf '%s *stdin\n' "$(cat "$MOCK_SPEC_HASH")"
+	exit 0
+fi
+exec "$REAL_OPENSSL" "$@"
+EOF
+chmod +x "$tmpdir/bin/helm" "$tmpdir/bin/kubectl" "$tmpdir/bin/openssl"
 
 common_env() {
-	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" \
+	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.6 \
+		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.7 \
 		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
 }
 
@@ -113,7 +151,7 @@ if grep -F 'helm template ' "$log" | grep -F -q -- '--is-upgrade'; then fail 'fr
 if grep -F -q 'helm upgrade ' "$log"; then fail 'fresh install used helm upgrade'; fi
 grep -F -q 'kubectl --context explicit-target apply --server-side --field-manager kubernetes-secret-generator-crd-manager' "$log" || fail 'direct install did not apply CRDs with the fixed field manager'
 if grep -F -q -- '--force-conflicts' "$log"; then fail 'direct CRD apply used force-conflicts'; fi
-grep -F -q 'kubectl --context explicit-target apply --server-side --dry-run=server' "$log" || fail 'CRD bundle did not pass a full server-side dry-run before mutation'
+grep -F 'kubectl --context explicit-target apply --server-side' "$log" | grep -F -q -- '--dry-run=server' || fail 'CRD bundle did not pass a full server-side dry-run before mutation'
 apply_line=$(grep -n -F 'kubectl --context explicit-target apply --server-side' "$log" | cut -d: -f1)
 apply_line=$(printf '%s\n' "$apply_line" | tail -n 1)
 install_line=$(grep -n -F 'helm install ksg ' "$log" | cut -d: -f1)
@@ -150,7 +188,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.6\townNamespace\t\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.7\townNamespace\t\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -173,7 +211,7 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.6\townNamespace\t\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.7\townNamespace\t\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null
@@ -233,6 +271,55 @@ fi
 grep -F -q 'kubectl --context explicit-target apply --server-side' "$log" || fail 'conflict fixture did not reach CRD SSA'
 if grep -F 'kubectl --context explicit-target apply --server-side' "$log" | grep -v -F -q -- '--dry-run=server'; then fail 'CRD write occurred after server-side dry-run conflict'; fi
 if grep -F -q 'helm upgrade ksg ' "$log"; then fail 'controller rollout started after CRD SSA conflict'; fi
+
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+	fail 'legacy CRD ownership takeover accepted a missing target-bound preflight report'
+fi
+assert_no_mutation
+
+preflight=$tmpdir/preflight.json
+ca_sha=$(printf '%s' 'test-ca' | "$real_openssl" dgst -sha256 -r | awk '{print $1}')
+printf '{"schemaVersion":1,"generatedAt":"%s","blockerCount":0,"target":{"context":"explicit-target","server":"https://target.example.invalid","caSHA256":"%s","releaseNamespace":"ksg-system","releaseName":"ksg"}}\n' \
+	"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ca_sha" >"$preflight"
+preflight_sha=$("$real_openssl" dgst -sha256 -r "$preflight" | awk '{print $1}')
+rm -f "$tmpdir/spec-hash"
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_FIELD_MANAGER=flux-client-side-apply \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+	fail 'direct legacy adoption accepted Flux managedFields ownership'
+fi
+assert_no_mutation
+rm -f "$tmpdir/spec-hash"
+: >"$log"
+common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null
+replace_lines=$(grep -F 'kubectl --context explicit-target replace ' "$log")
+[ "$(printf '%s\n' "$replace_lines" | grep -F -c -- '--dry-run=server')" -eq 3 ] || fail 'exact legacy CRD adoption did not server-dry-run every replacement'
+[ "$(printf '%s\n' "$replace_lines" | grep -F -v -c -- '--dry-run=server')" -eq 3 ] || fail 'exact legacy CRD adoption did not replace every CRD with a resourceVersion precondition'
+grep -F -q 'kubectl --context explicit-target apply --server-side --field-manager kubernetes-secret-generator-crd-manager' "$log" || fail 'legacy CRD replacement did not establish normal SSA ownership'
+if grep -F -q -- '--force-conflicts' "$log"; then fail 'legacy CRD replacement used force-conflicts'; fi
+grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated legacy CRD takeover did not continue to manager upgrade'
+
+rm -f "$tmpdir/spec-hash"
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_CONFLICT=true \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+	fail 'legacy CRD replacement ignored a concurrent resourceVersion conflict'
+fi
+grep -F -q 'kubectl --context explicit-target replace --field-manager kubernetes-secret-generator-crd-manager' "$log" || fail 'concurrency fixture did not reach guarded CRD replacement'
+if grep -F -q 'helm upgrade ksg ' "$log"; then fail 'manager rollout continued after a CRD resourceVersion conflict'; fi
 
 : >"$log"
 common_env "$repo_root/scripts/helm-release.sh" uninstall >/dev/null

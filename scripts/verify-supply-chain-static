@@ -86,8 +86,19 @@ has "$promote" 'GitHub Release chart asset bytes mismatch'
 has "$root/scripts/verify-signing-identity.sh" '.github/workflows/release-candidate.yml@refs/tags/$tag'
 if find "$root" -type d \( -name .git -o -name .cache -o -name vendor \) -prune -o -type f \( -name Dockerfile -o -name 'Dockerfile.*' \) -exec awk 'toupper($1)=="FROM" {image=$2; if (image ~ /^--platform=/) image=$3; if (image !~ /@sha256:[0-9a-fA-F]{64}$/) exit 1}' {} +; then :; else fail 'Dockerfile FROM images must use sha256 digests'; fi
 ! grep -E -q '(:latest([^[:alnum:]_.-]|$)|image\.tag=latest)' "$workflows"/*.yml "$root/Makefile" "$root/deploy/helm-chart/kubernetes-secret-generator/values.yaml" || fail 'latest is forbidden in build, publish, and deployment inputs'
-for path in "$workflows"/*.yml "$root/scripts/helm-release.sh"; do
-	[ ! -f "$path" ] || ! grep -F -q -- '--force-conflicts' "$path" || fail '--force-conflicts is forbidden in release paths'
+has "$root/scripts/helm-release.sh" 'validate_legacy_preflight'
+has "$root/scripts/helm-release.sh" '.manager == "kubectl-client-side-apply" and .operation == "Update"'
+has "$root/scripts/helm-release.sh" '.metadata.resourceVersion'
+has "$root/scripts/helm-release.sh" 'adopt_legacy_crds=true'
+has "$root/scripts/helm-release.sh" 'immediate legacy-adoption preflight reported blockers or an unstable snapshot'
+has "$root/scripts/helm-release.sh" 'replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager'
+has "$root/scripts/helm-release.sh" 'replace --field-manager kubernetes-secret-generator-crd-manager'
+identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$root/scripts/helm-release.sh" | cut -d: -f1)
+preflight_line=$(grep -n -F 'current_preflight=$tmpdir/current-preflight.json' "$root/scripts/helm-release.sh" | cut -d: -f1)
+replace_line=$(grep -n -F 'replace --field-manager kubernetes-secret-generator-crd-manager' "$root/scripts/helm-release.sh" | cut -d: -f1)
+[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$replace_line" ] || fail 'legacy CRD replacement is not ordered after exact identity and immediate preflight'
+for path in "$promote" "$root/scripts/helm-release.sh"; do
+	! grep -F -q -- '--force-conflicts' "$path" || fail '--force-conflicts is forbidden in release mutation paths'
 done
 
 echo 'supply-chain static policy checks passed'
