@@ -20,6 +20,16 @@ k() { kubectl --kubeconfig "$kubeconfig" --context "$context" "$@"; }
 digest() { openssl dgst -sha256 -r | awk '{print $1}'; }
 file_digest() { openssl dgst -sha256 -r "$1" | awk '{print "sha256:"$1}'; }
 
+v3_install_diagnostics() {
+	printf '%s\n' 'v3 Helm install failed; collecting bounded redacted diagnostics' >&2
+	k -n "$namespace" get pods -o wide >&2 || true
+	k -n "$namespace" get events --sort-by=.lastTimestamp 2>&1 | tail -n 80 >&2 || true
+	for pod in $(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o name 2>/dev/null || true); do
+		k -n "$namespace" describe "$pod" 2>&1 | tail -n 200 >&2 || true
+		k -n "$namespace" logs "$pod" --all-containers --tail=200 2>&1 | tail -n 200 >&2 || true
+	done
+}
+
 # shellcheck disable=SC2329 # Invoked by the trap below.
 cleanup() {
 	status=$?
@@ -114,12 +124,16 @@ k wait --for=condition=Established --timeout=60s \
 	crd/basicauths.secretgenerator.mittwald.de \
 	crd/sshkeypairs.secretgenerator.mittwald.de \
 	crd/stringsecrets.secretgenerator.mittwald.de >/dev/null
-helm install "$release" "$v3_tree/deploy/helm-chart/kubernetes-secret-generator" \
+if ! helm install "$release" "$v3_tree/deploy/helm-chart/kubernetes-secret-generator" \
 	--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace" \
 	--set installCRDs=true --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
 	--set image.registry=ghcr.io --set image.repository=mrchypark/kubernetes-secret-generator \
+	--set image.pullPolicy=IfNotPresent \
 	--set-string "image.tag=${V3_COMPAT_IMAGE#ghcr.io/mrchypark/kubernetes-secret-generator:}" \
-	--wait --timeout 180s >/dev/null
+	--wait --timeout 180s >/dev/null; then
+	v3_install_diagnostics
+	fail 'v3 Helm install failed'
+fi
 
 k -n "$namespace" apply -f - >/dev/null <<'EOF'
 apiVersion: secretgenerator.mittwald.de/v1alpha1
