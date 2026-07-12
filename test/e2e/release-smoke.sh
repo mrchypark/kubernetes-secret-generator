@@ -242,10 +242,19 @@ for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mi
 	esac
 	expected_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
 	live_crd=$legacy_live_dir/$crd.json
-	k get "customresourcedefinition/$crd" -o json >"$live_crd"
-	jq -e '(.metadata.managedFields // []) as $fields |
-		($fields | length) > 0 and all($fields[]; .manager == "kubectl-client-side-apply" and .operation == "Update")' \
-		"$live_crd" >/dev/null || fail "$crd has an unexpected legacy field manager"
+	k get "customresourcedefinition/$crd" --show-managed-fields=true -o json >"$live_crd"
+	if ! jq -e '(.metadata.managedFields // []) as $fields |
+		($fields | length) == 2 and
+		any($fields[]; .manager == "kubectl-client-side-apply" and .operation == "Update" and
+			.apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and
+			(.fieldsV1 | has("f:spec")) and ((.fieldsV1 | keys) - ["f:metadata","f:spec"] | length) == 0) and
+		any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and
+			.apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and
+			(.fieldsV1 | keys) == ["f:status"])' "$live_crd" >/dev/null; then
+		printf 'error: %s managedFields tuples are not the exact v3 client-apply plus Kubernetes status set:\n' "$crd" >&2
+		jq -c '[.metadata.managedFields[]? | {manager,operation,apiVersion,subresource:(.subresource // ""),fieldPaths:([(.fieldsV1 // {}) | paths | map(tostring) | join(".")] | sort)}]' "$live_crd" >&2
+		fail 'refusing direct CRD ownership takeover'
+	fi
 	jq -e '.metadata.uid != null and .metadata.uid != "" and .metadata.resourceVersion != null and .metadata.resourceVersion != ""' \
 		"$live_crd" >/dev/null || fail "$crd lacks UID/resourceVersion concurrency evidence"
 	actual_spec_sha=$(jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' "$live_crd" |

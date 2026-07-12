@@ -64,6 +64,11 @@ for contract in \
 	'crd.v3.4.1.basicauths.spec-sha256' \
 	'does not match the pinned v3.4.1 CRD spec before ownership takeover' \
 	'.manager == "kubectl-client-side-apply" and .operation == "Update"' \
+	'--show-managed-fields=true' \
+	'.manager == "kube-apiserver" and .operation == "Update"' \
+	'.subresource == "status"' \
+	'(.fieldsV1 | keys) == ["f:status"]' \
+	'fieldPaths:' \
 	'.metadata.resourceVersion' \
 	'immediate legacy-adoption preflight reported blockers or an unstable snapshot' \
 	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
