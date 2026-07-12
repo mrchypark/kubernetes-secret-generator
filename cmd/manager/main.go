@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/mittwald/kubernetes-secret-generator/pkg/apis"
 	"github.com/mittwald/kubernetes-secret-generator/pkg/controller"
+	controllerobservability "github.com/mittwald/kubernetes-secret-generator/pkg/controller/observability"
+	secretcontroller "github.com/mittwald/kubernetes-secret-generator/pkg/controller/secret"
 	"github.com/mittwald/kubernetes-secret-generator/version"
 
 	"github.com/spf13/pflag"
@@ -53,6 +56,8 @@ func main() {
 	pflag.String("secret-encoding", "base64", "Encoding for secrets")
 	pflag.Bool("use-metrics-service", false, "Deprecated; metrics are always exposed on the configured metrics bind address")
 	pflag.Bool("disable-crd-support", false, "Whether to disable CRD support and registering")
+	pflag.Bool("leader-elect", true, "Enable leader election for controller manager")
+	pflag.String("leader-election-id", "kubernetes-secret-generator-lock", "Name of the leader election Lease")
 
 	pflag.Parse()
 
@@ -70,13 +75,6 @@ func main() {
 
 	viper.AutomaticEnv()
 
-	if viper.GetInt("secret-length") == 0 {
-		panic(fmt.Errorf("parameter secret-length is set to 0"))
-	}
-	if viper.GetInt("ssh-key-length") == 0 {
-		panic(fmt.Errorf("parameter ssh-key-length is set to 0"))
-	}
-
 	// Use a zap logr.Logger implementation. If none of the zap
 	// flags are configured (or if the zap flag set is not being
 	// used), this defaults to a production zap logger.
@@ -86,6 +84,10 @@ func main() {
 	// be propagated through the whole operator, generating
 	// uniform and structured logs.
 	logf.SetLogger(zap.New())
+	if err = secretcontroller.ValidateStartupDefaults(); err != nil {
+		log.Error(err, "invalid generator startup defaults")
+		os.Exit(1)
+	}
 
 	printVersion()
 
@@ -103,9 +105,9 @@ func main() {
 		Cache:                      cacheOptions(namespaces),
 		Metrics:                    metricsserver.Options{BindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort)},
 		HealthProbeBindAddress:     ":8080",
-		LeaderElection:             true,
+		LeaderElection:             viper.GetBool("leader-elect"),
 		LeaderElectionResourceLock: "leases",
-		LeaderElectionID:           "kubernetes-secret-generator-lock",
+		LeaderElectionID:           viper.GetString("leader-election-id"),
 	}
 
 	// add custom resources to scheme
@@ -134,6 +136,25 @@ func main() {
 	err = mgr.AddReadyzCheck("ready-ping", healthz.Ping)
 	if err != nil {
 		log.Error(err, "couldn't add readiness probe")
+		os.Exit(1)
+	}
+	err = mgr.AddReadyzCheck("cache-sync", func(req *http.Request) error {
+		if !mgr.GetCache().WaitForCacheSync(req.Context()) {
+			return fmt.Errorf("cache is not synchronized")
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error(err, "couldn't add cache readiness probe")
+		os.Exit(1)
+	}
+	apiProbe, probeErr := controllerobservability.NewAPIConnectivityProbe(cfg)
+	if probeErr != nil {
+		log.Error(probeErr, "couldn't create API connectivity probe")
+		os.Exit(1)
+	}
+	if err = mgr.Add(apiProbe); err != nil {
+		log.Error(err, "couldn't add API connectivity probe")
 		os.Exit(1)
 	}
 

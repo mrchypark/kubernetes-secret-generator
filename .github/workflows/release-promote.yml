@@ -1,0 +1,181 @@
+name: Promote release
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful release-candidate workflow run ID
+        required: true
+        type: string
+      candidate_digest:
+        description: Exact sha256 candidate image digest
+        required: true
+        type: string
+      source_commit:
+        description: Exact 40-hex release tag commit
+        required: true
+        type: string
+      release_tag:
+        description: Protected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N tag
+        required: true
+        type: string
+      chart_sha256:
+        description: Exact sha256 packaged chart digest
+        required: true
+        type: string
+      approval_issue:
+        description: Closed release checklist issue number or URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/mrchypark/kubernetes-secret-generator
+  CHART_IMAGE: ghcr.io/mrchypark/charts/kubernetes-secret-generator
+
+jobs:
+  promote:
+    environment: production-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: promote-${{ inputs.release_tag }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ inputs.source_commit }}
+          fetch-depth: 0
+
+      - name: Validate release source and approval
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          APPROVAL_ISSUE: ${{ inputs.approval_issue }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          CHART_SHA256: ${{ inputs.chart_sha256 }}
+        run: |
+          scripts/validate-release.sh
+          gh issue view "$APPROVAL_ISSUE" --repo "$GITHUB_REPOSITORY" --json state,body,url >approval.json
+          jq -e --arg prefix "https://github.com/${GITHUB_REPOSITORY}/issues/" \
+            '.state == "CLOSED" and (.url | startswith($prefix))' approval.json >/dev/null
+          jq -r .body approval.json >approval-body.md
+          test "$(grep -Ec '^- \[[xX]\] ' approval-body.md)" -eq 9
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}"
+          grep -Fqx "Candidate run: $run_url" approval-body.md
+          grep -Fqx "Tag: \`$RELEASE_TAG\`" approval-body.md
+          grep -Fqx "Source commit: $SOURCE_COMMIT" approval-body.md
+          grep -Fqx "Image digest: \`$DIGEST\`" approval-body.md
+          grep -Fqx "Chart SHA-256: \`$CHART_SHA256\`" approval-body.md
+          grep -Fqx "Preflight report run: $run_url" approval-body.md
+          while IFS= read -r item; do
+            grep -Fqx -- "- [x] $item" approval-body.md || grep -Fqx -- "- [X] $item" approval-body.md
+          done <<'EOF'
+          CI passed on the release commit
+          Candidate tag is protected and matches Chart.yaml and values.yaml
+          amd64 and arm64 images built from one candidate build and passed startup smoke
+          Per-architecture vulnerability scans and SBOMs were reviewed
+          The exact candidate digest has a valid keyless signature
+          The disposable-kind upgrade/rollback smoke completed within 15 minutes
+          v3-to-v4 preflight reported zero blockers and its safe Markdown report is linked above
+          Backup/restore was manually rehearsed
+          Release notes and upgrade/rollback documentation were reviewed
+          EOF
+
+      - name: Install locked Helm
+        env:
+          HELM_INSTALL_DIR: ${{ runner.temp }}/helm-bin
+        run: |
+          scripts/install-helm.sh
+          echo "$HELM_INSTALL_DIR" >>"$GITHUB_PATH"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Download candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: candidate
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify exact candidate inputs and signature
+        env:
+          DIGEST: ${{ inputs.candidate_digest }}
+          EXPECTED_CHART_SHA256: ${{ inputs.chart_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          printf '%s\n' "$DIGEST" "$EXPECTED_CHART_SHA256" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_COMMIT" --arg image "$DIGEST" --arg chart "$EXPECTED_CHART_SHA256" \
+            '.schemaVersion == 1 and .releaseTag == $tag and .sourceCommit == $source and .imageDigest == $image and .chartSHA256 == $chart' candidate/candidate.json >/dev/null
+          test "$(cat candidate/image-digest.txt)" = "$DIGEST"
+          chart=$(find candidate -maxdepth 1 -type f -name '*.tgz')
+          test -n "$chart" && test "$(printf '%s\n' "$chart" | wc -l)" -eq 1
+          test "sha256:$(sha256sum "$chart" | awk '{print $1}')" = "$EXPECTED_CHART_SHA256"
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@refs/tags/$RELEASE_TAG"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE_NAME@$DIGEST" >/dev/null
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Promote exact image digest and chart bytes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          EXPECTED_CHART_SHA256: ${{ inputs.chart_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          image_error=$(mktemp)
+          if existing=$(docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" --format '{{.Manifest.Digest}}' 2>"$image_error"); then
+            test "$existing" = "$DIGEST" || { echo 'release image tag digest mismatch' >&2; exit 1; }
+          else
+            grep -Eqi 'manifest unknown|name unknown|not found' "$image_error" || { cat "$image_error" >&2; exit 1; }
+            docker buildx imagetools create --tag "$IMAGE_NAME:$RELEASE_TAG" "$IMAGE_NAME@$DIGEST"
+          fi
+          test "$(docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG" --format '{{.Manifest.Digest}}')" = "$DIGEST"
+
+          version=${RELEASE_TAG#v}
+          chart=$(find candidate -maxdepth 1 -type f -name '*.tgz')
+          chart_error=$(mktemp)
+          mkdir existing-chart
+          if helm pull "oci://ghcr.io/mrchypark/charts/kubernetes-secret-generator" --version "$version" --destination existing-chart 2>"$chart_error"; then
+            test "sha256:$(sha256sum "existing-chart/kubernetes-secret-generator-$version.tgz" | awk '{print $1}')" = "$EXPECTED_CHART_SHA256" || { echo 'release chart bytes mismatch' >&2; exit 1; }
+          else
+            grep -Eqi 'manifest unknown|name unknown|not found' "$chart_error" || { cat "$chart_error" >&2; exit 1; }
+            helm push "$chart" oci://ghcr.io/mrchypark/charts
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease >release.json 2>/dev/null; then
+            case "$RELEASE_TAG" in
+              *-rc.*) jq -e '.isPrerelease == true' release.json >/dev/null ;;
+              *) jq -e '.isPrerelease == false' release.json >/dev/null ;;
+            esac
+            release_asset="kubernetes-secret-generator-$version.tgz"
+            mkdir existing-release
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$release_asset" --dir existing-release
+            test "sha256:$(sha256sum "existing-release/$release_asset" | awk '{print $1}')" = "$EXPECTED_CHART_SHA256" || { echo 'GitHub Release chart asset bytes mismatch' >&2; exit 1; }
+          else
+            set -- gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$SOURCE_COMMIT" --title "$RELEASE_TAG" "$chart"
+            case "$RELEASE_TAG" in *-rc.*) set -- "$@" --prerelease ;; esac
+            "$@"
+          fi

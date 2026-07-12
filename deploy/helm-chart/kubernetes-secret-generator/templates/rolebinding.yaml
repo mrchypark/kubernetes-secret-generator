@@ -1,16 +1,42 @@
-{{- if .Values.rbac.create -}}
-kind: RoleBinding
+{{- if and .Values.rbac.create .Values.leaderElection.enabled }}
 apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
 metadata:
-  name: "mittwald:{{ include "kubernetes-secret-generator.serviceAccountName" . }}"
+  name: {{ include "kubernetes-secret-generator.rbacName" . }}-leader
+  namespace: {{ .Release.Namespace }}
   labels:
-  {{ include "kubernetes-secret-generator.labels" . | nindent 4 }}
+    {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
 roleRef:
-  kind: Role
-  name: "mittwald:{{ include "kubernetes-secret-generator.serviceAccountName" . }}"
   apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kubernetes-secret-generator.rbacName" . }}-leader
 subjects:
   - kind: ServiceAccount
-    namespace: {{ .Release.Namespace | quote }}
     name: {{ include "kubernetes-secret-generator.serviceAccountName" . }}
-{{- end -}}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- if and .Values.rbac.create (ne .Values.scope.mode "cluster") }}
+{{- $root := . }}
+{{- $namespaces := list .Release.Namespace }}
+{{- if eq .Values.scope.mode "namespaces" }}
+{{- $namespaces = sortAlpha .Values.scope.namespaces }}
+{{- end }}
+{{- range $namespace := $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kubernetes-secret-generator.rbacName" $root }}-access
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kubernetes-secret-generator.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kubernetes-secret-generator.rbacName" $root }}-access
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kubernetes-secret-generator.serviceAccountName" $root }}
+    namespace: {{ $root.Release.Namespace }}
+{{- end }}
+{{- end }}

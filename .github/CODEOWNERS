@@ -1,0 +1,6 @@
+/.github/workflows/** @mrchypark
+/.github/vulnerability-waivers.json @mrchypark
+/build/** @mrchypark
+/scripts/check-vulnerability-waivers.sh @mrchypark
+/scripts/validate-release.sh @mrchypark
+/tools.lock @mrchypark
