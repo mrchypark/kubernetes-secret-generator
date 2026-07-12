@@ -49,12 +49,14 @@ for contract in \
 	'sleep 900' \
 	'pod-security.kubernetes.io/warn=restricted' \
 	'V3_COMPAT_IMAGE differs from the locked amd64 v3.4.1 image' \
+	'--set image.pullPolicy=IfNotPresent' \
+	'v3_install_diagnostics' \
 	'"$repo_root/scripts/preflight-v4.sh"' \
 	'compatibilityProfile=$profile' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
-	grep -F -q "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
+	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
 if grep -F -q 'pod-security.kubernetes.io/enforce=restricted' "$release"; then
 	fail 'release smoke must not enforce restricted Pod Security before the legacy v3 upgrade'

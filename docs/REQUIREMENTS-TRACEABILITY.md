@@ -1,4 +1,4 @@
-# v4.0.0-rc.3 requirements traceability
+# v4.0.0-rc.4 requirements traceability
 
 | Requirement | Automated check | Operator document |
 |---|---|---|
