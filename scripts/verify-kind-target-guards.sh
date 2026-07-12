@@ -98,12 +98,12 @@ baseline=$(inventory <<'EOF'
 ]}
 EOF
 )
-with_unrelated=$(printf '%s\n' "$baseline" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}}) + [
+with_unrelated=$(printf '%s\n' "$baseline" | jq '{items: (map({kind,metadata:{name,uid,ownerReferences:.owners}}) + [
   {kind:"Secret",metadata:{name:"sh.helm.release.v1.ksg-release.v3",uid:"helm-history"}},
   {kind:"Secret",metadata:{name:"unrelated",uid:"unrelated"}},
   {kind:"Secret",metadata:{name:"smoke-unrelated",uid:"smoke-unrelated"}},
   {kind:"ConfigMap",metadata:{name:"smoke-config",uid:"unrelated-config"}}
-]}' | inventory)
+])}' | inventory)
 [ "$with_unrelated" = "$baseline" ] || fail 'fixture inventory includes Helm history or unrelated objects'
 missing=$(printf '%s\n' "$baseline" | jq 'del(.[] | select(.kind == "Secret" and .name == "smoke-basic"))')
 [ "$(printf '%s\n' "$missing" | jq '{items: map({kind,metadata:{name,uid,ownerReferences:.owners}})}' | inventory)" != "$baseline" ] || fail 'fixture inventory ignored managed fixture loss'
