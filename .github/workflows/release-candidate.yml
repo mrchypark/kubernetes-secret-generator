@@ -149,6 +149,19 @@ jobs:
           fi
           jq -e '.status == "passed" and .durationSeconds >= 600 and .durationSeconds < 900 and .healthChecks >= 1 and .controller == {ready:true,restarts:0,panicOrOOM:false,recovered:true}' release-smoke-summary.json >/dev/null
 
+      - name: Verify sanitized failure diagnostics
+        if: failure()
+        run: test ! -e preflight-report.md || scripts/check-test-artifacts.sh preflight-report.md
+
+      - name: Upload sanitized failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-diagnostics-${{ github.run_id }}
+          path: preflight-report.md
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Stage candidate artifact
         run: |
           mkdir candidate-artifact

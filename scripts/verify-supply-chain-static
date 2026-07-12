@@ -52,6 +52,8 @@ has "$candidate" 'cosign verify --certificate-identity'
 count "$candidate" '^[[:space:]]+helm package ' 1
 has "$candidate" 'timeout 15m test/e2e/release-smoke.sh >release-smoke-summary.json'
 has "$candidate" '.durationSeconds >= 600 and .durationSeconds < 900'
+has "$candidate" 'test ! -e preflight-report.md || scripts/check-test-artifacts.sh preflight-report.md'
+has "$candidate" 'path: preflight-report.md'
 has "$candidate" 'release-smoke-summary.json candidate-artifact/'
 tail -8 "$candidate" | grep -q 'actions/upload-artifact@' || fail 'candidate artifact upload must be last'
 ! grep -Eq 'helm push |imagetools create --tag .*RELEASE_TAG|:latest' "$candidate" || fail 'candidate must not publish immutable or latest targets'

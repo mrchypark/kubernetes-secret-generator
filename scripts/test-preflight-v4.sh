@@ -28,8 +28,13 @@ secret_json() {
 		stale) extra=',"stale":"c3RhbGU="' ;;
 		*) exit 72 ;;
 	esac
+	secure='"secret-generator.v1.mittwald.de/secure":"yes"'
+	[ "${SECURE_MARKER:-present}" != missing ] || secure=
 	regenerate=
-	[ "${ANNOTATION_REGENERATE:-false}" != true ] || regenerate=',"secret-generator.v1.mittwald.de/regenerate":"false"'
+	if [ "${ANNOTATION_REGENERATE:-false}" = true ]; then
+		[ -z "$secure" ] || regenerate=,
+		regenerate="${regenerate}\"secret-generator.v1.mittwald.de/regenerate\":\"false\""
+	fi
 	rv=1
 	[ "${SNAPSHOT_MODE:-stable}" != changed ] || [ "$phase" != report ] || rv=2
 	case "${OWNER_MODE:-exact}" in
@@ -40,7 +45,7 @@ secret_json() {
 	esac
 	secret_type=Opaque
 	[ "${BASELINE_MODE:-valid}" != type-mismatch ] || secret_type=example.test/mismatch
-	printf '{"apiVersion":"v1","kind":"Secret","metadata":{"namespace":"app","name":"login","uid":"secret-uid","resourceVersion":"%s","labels":{"team":"platform"},"annotations":{"secret-generator.v1.mittwald.de/secure":"yes"%s},"ownerReferences":%s},"immutable":%s,"type":"%s","data":{"password":"%s","literal":"%s"%s}}' "$rv" "$regenerate" "$refs" "${IMMUTABLE_SECRET:-false}" "$secret_type" "$generated" "$literal" "$extra"
+	printf '{"apiVersion":"v1","kind":"Secret","metadata":{"namespace":"app","name":"login","uid":"secret-uid","resourceVersion":"%s","labels":{"team":"platform"},"annotations":{%s%s},"ownerReferences":%s},"immutable":%s,"type":"%s","data":{"password":"%s","literal":"%s"%s}}' "$rv" "$secure" "$regenerate" "$refs" "${IMMUTABLE_SECRET:-false}" "$secret_type" "$generated" "$literal" "$extra"
 }
 case "$*" in
   *'config view'*'.server'*) printf '%s' 'https://test.example.invalid' ;;
@@ -90,6 +95,7 @@ run() {
 	env PATH="$tmp_dir/bin:$PATH" KUBECTL_LOG="$log" BLOCKED="${BLOCKED:-false}" OWNER_MODE="${OWNER_MODE:-exact}" \
 		RUN_ID="$run_counter" \
 		BASELINE_MODE="${BASELINE_MODE:-valid}" SPEC_MODE="${SPEC_MODE:-valid}" ANNOTATION_REGENERATE="${ANNOTATION_REGENERATE:-false}" \
+		SECURE_MARKER="${SECURE_MARKER:-present}" \
 		IMMUTABLE_SECRET="${IMMUTABLE_SECRET:-false}" \
 		READ_FAIL="${READ_FAIL:-}" SNAPSHOT_MODE="${SNAPSHOT_MODE:-stable}" WATCH_NAMESPACE_VALUE="${WATCH_NAMESPACE_VALUE:-ksg-system}" \
 		DEPLOYMENT_SNAPSHOT_MODE="${DEPLOYMENT_SNAPSHOT_MODE:-stable}" \
@@ -172,6 +178,16 @@ if ANNOTATION_REGENERATE=true run >"$tmp_dir/regenerate.json" 2>/dev/null; then
 	exit 1
 fi
 jq -e '.findings | any(.code == "RegenerateAnnotationPresent")' "$tmp_dir/regenerate.json" >/dev/null
+
+if SECURE_MARKER=missing run >"$tmp_dir/secure-marker.json" 2>/dev/null; then
+	echo 'preflight accepted a StringSecret whose reviewed secure marker was missing' >&2
+	exit 1
+fi
+jq -e '.findings | any(.code == "SecureMarkerMissing")' "$tmp_dir/secure-marker.json" >/dev/null
+if grep -Eq 'YWJjZGVmZ2g=|ZXhwZWN0ZWQ=' "$tmp_dir/secure-marker.json"; then
+	echo 'secure-marker preflight report exposed Secret data' >&2
+	exit 1
+fi
 
 if SCOPE_MODE='' CONFIRMED_SCOPE='' run >"$tmp_dir/scope.json" 2>/dev/null; then
 	echo 'preflight accepted missing scope confirmation' >&2
