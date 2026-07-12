@@ -4,7 +4,7 @@
 
 | Version | Security fixes |
 |---|---|
-| `v4.0.0-rc.6` | Release candidate; security reports accepted, no production support claim |
+| `v4.0.0-rc.7` | Release candidate; security reports accepted, no production support claim |
 | v3 and older | Best effort while evaluating the v4 release candidate |
 
 Supported Kubernetes, deployment tools, and CPU architectures are listed in [docs/SUPPORT.md](docs/SUPPORT.md).

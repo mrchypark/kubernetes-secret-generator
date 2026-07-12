@@ -1,8 +1,8 @@
-# v4.0.0-rc.6 production-readiness directive
+# v4.0.0-rc.7 production-readiness directive
 
 ## Goal
 
-Ship a reviewable `v4.0.0-rc.6` candidate with safe migration tooling and clear rollback.
+Ship a reviewable `v4.0.0-rc.7` candidate with safe migration tooling and clear rollback.
 This release does not claim an SLA, capacity, high availability, automatic failover, or
 production certification. Existing security and API correctness checks remain mandatory.
 
@@ -25,7 +25,7 @@ production certification. Existing security and API correctness checks remain ma
 
 ## Deferred scope
 
-The following are deliberately not per-release blockers for `v4.0.0-rc.6`: automated
+The following are deliberately not per-release blockers for `v4.0.0-rc.7`: automated
 multi-stage attestations, long-running resilience qualification, architecture/minor upgrade
 matrices, failover certification, mandatory dual deployment-path rehearsal, HA topology,
 and PDB availability claims.

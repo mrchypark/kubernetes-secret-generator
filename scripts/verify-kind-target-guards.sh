@@ -61,12 +61,20 @@ for contract in \
 	'"$repo_root/scripts/preflight-v4.sh"' \
 	'REPORT_FORMAT=markdown REPORT_FILE="$preflight_report"' \
 	'read-only v4 preflight failed; sanitized report follows' \
+	'crd.v3.4.1.basicauths.spec-sha256' \
+	'does not match the pinned v3.4.1 CRD spec before ownership takeover' \
+	'apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager --dry-run=server' \
+	'apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager -f' \
 	'compatibilityProfile=$profile' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+preflight_line=$(grep -n -F 'grep -F -x -q -- '\''- Blockers: **0**'\''' "$release" | cut -d: -f1)
+identity_line=$(grep -n -F 'actual_spec_sha=$(k get' "$release" | cut -d: -f1)
+takeover_line=$(grep -n -F 'apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager -f' "$release" | cut -d: -f1)
+[ "$preflight_line" -lt "$identity_line" ] && [ "$identity_line" -lt "$takeover_line" ] || fail 'legacy CRD takeover is not gated by preflight and exact spec identity'
 if grep -E 'kind load docker-image.*\$(CANDIDATE_IMAGE|V3_COMPAT_IMAGE)' "$release" >/dev/null; then
 	fail 'release smoke must not kind-load digest references directly'
 fi

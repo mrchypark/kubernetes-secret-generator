@@ -230,9 +230,25 @@ else
 fi
 grep -F -x -q -- '- Blockers: **0**' "$preflight_report" || fail 'read-only v4 preflight reported blockers'
 
+# A v3.4.1 client-side apply owns the CRD version list. Take over only after
+# the zero-blocker preflight and exact normalized v3 spec verification.
+for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
+	case "$crd" in
+		basicauths.*) lock_key=crd.v3.4.1.basicauths.spec-sha256 ;;
+		sshkeypairs.*) lock_key=crd.v3.4.1.sshkeypairs.spec-sha256 ;;
+		stringsecrets.*) lock_key=crd.v3.4.1.stringsecrets.spec-sha256 ;;
+	esac
+	expected_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
+	actual_spec_sha=$(k get "customresourcedefinition/$crd" -o json |
+		jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' |
+		openssl dgst -sha256 -r | awk '{print $1}')
+	[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd does not match the pinned v3.4.1 CRD spec before ownership takeover"
+done
+
 crds=$workdir/v4-crds.yaml
 helm show crds "$CHART_TGZ" >"$crds"
-k apply --server-side --field-manager=kubernetes-secret-generator-crd-manager -f "$crds" >/dev/null
+k apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager --dry-run=server -f "$crds" >/dev/null
+k apply --server-side --force-conflicts --field-manager=kubernetes-secret-generator-crd-manager -f "$crds" >/dev/null
 k wait --for=condition=Established --timeout=60s \
 	crd/basicauths.secretgenerator.mittwald.de \
 	crd/sshkeypairs.secretgenerator.mittwald.de \

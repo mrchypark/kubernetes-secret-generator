@@ -60,6 +60,27 @@ if [ -n "${EXPECTED_CA_SHA256:-}" ]; then
 	[ "$ca_sha" = "$EXPECTED_CA_SHA256" ] || fail 'EXPECTED_CA_SHA256 does not match selected context'
 fi
 
+validate_legacy_preflight() {
+	require EXPECTED_SERVER_URL
+	require EXPECTED_CA_SHA256
+	require RAW_V3_PREFLIGHT_SHA256
+	case "$RAW_V3_PREFLIGHT_SHA256" in
+		????????????????????????????????????????????????????????????????) ;;
+		*) fail 'RAW_V3_PREFLIGHT_SHA256 must be a 64-character lowercase SHA-256' ;;
+	esac
+	case "$RAW_V3_PREFLIGHT_SHA256" in *[!0-9a-f]*) fail 'RAW_V3_PREFLIGHT_SHA256 must be lowercase hexadecimal' ;; esac
+	require RAW_V3_PREFLIGHT_REPORT
+	case "$RAW_V3_PREFLIGHT_REPORT" in /*) ;; *) fail 'RAW_V3_PREFLIGHT_REPORT must be an absolute path' ;; esac
+	[ -f "$RAW_V3_PREFLIGHT_REPORT" ] || fail 'RAW_V3_PREFLIGHT_REPORT does not exist'
+	command -v jq >/dev/null 2>&1 || fail 'jq is required to validate RAW_V3_PREFLIGHT_REPORT'
+	command -v openssl >/dev/null 2>&1 || fail 'openssl is required to validate RAW_V3_PREFLIGHT_REPORT'
+	report_sha=$(openssl dgst -sha256 -r "$RAW_V3_PREFLIGHT_REPORT" | awk '{print $1}')
+	[ "$report_sha" = "$RAW_V3_PREFLIGHT_SHA256" ] || fail 'RAW_V3_PREFLIGHT_SHA256 does not match the report'
+	jq -e --arg context "$KUBE_CONTEXT" --arg server "$server" --arg ca "$ca_sha" --arg namespace "$NAMESPACE" --arg release "$RELEASE_NAME" \
+		'.schemaVersion == 1 and .blockerCount == 0 and .target.context == $context and .target.server == $server and .target.caSHA256 == $ca and .target.releaseNamespace == $namespace and .target.releaseName == $release and ((.generatedAt | fromdateiso8601) <= now) and (now - (.generatedAt | fromdateiso8601) <= 86400)' \
+		"$RAW_V3_PREFLIGHT_REPORT" >/dev/null || fail 'RAW_V3_PREFLIGHT_REPORT is not a zero-blocker report for this exact target'
+}
+
 if [ "$action" = uninstall ]; then
 	exec helm uninstall "$RELEASE_NAME" --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE"
 fi
@@ -78,24 +99,7 @@ if [ "$action" = install ]; then
 		[ "$SCOPE_MODE" = "$CONFIRMED_SCOPE" ] || fail 'CONFIRMED_SCOPE must exactly match SCOPE_MODE'
 	fi
 	if [ "$RAW_V3_MIGRATION" = true ]; then
-		require EXPECTED_SERVER_URL
-		require EXPECTED_CA_SHA256
-		require RAW_V3_PREFLIGHT_SHA256
-		case "$RAW_V3_PREFLIGHT_SHA256" in
-			????????????????????????????????????????????????????????????????) ;;
-			*) fail 'RAW_V3_PREFLIGHT_SHA256 must be a 64-character lowercase SHA-256' ;;
-		esac
-		case "$RAW_V3_PREFLIGHT_SHA256" in *[!0-9a-f]*) fail 'RAW_V3_PREFLIGHT_SHA256 must be lowercase hexadecimal' ;; esac
-		require RAW_V3_PREFLIGHT_REPORT
-		case "$RAW_V3_PREFLIGHT_REPORT" in /*) ;; *) fail 'RAW_V3_PREFLIGHT_REPORT must be an absolute path' ;; esac
-		[ -f "$RAW_V3_PREFLIGHT_REPORT" ] || fail 'RAW_V3_PREFLIGHT_REPORT does not exist'
-		command -v jq >/dev/null 2>&1 || fail 'jq is required to validate RAW_V3_PREFLIGHT_REPORT'
-		command -v openssl >/dev/null 2>&1 || fail 'openssl is required to validate RAW_V3_PREFLIGHT_REPORT'
-		report_sha=$(openssl dgst -sha256 -r "$RAW_V3_PREFLIGHT_REPORT" | awk '{print $1}')
-		[ "$report_sha" = "$RAW_V3_PREFLIGHT_SHA256" ] || fail 'RAW_V3_PREFLIGHT_SHA256 does not match the report'
-		jq -e --arg context "$KUBE_CONTEXT" --arg server "$server" --arg ca "$ca_sha" --arg namespace "$NAMESPACE" --arg release "$RELEASE_NAME" \
-			'.schemaVersion == 1 and .blockerCount == 0 and .target.context == $context and .target.server == $server and .target.caSHA256 == $ca and .target.releaseNamespace == $namespace and .target.releaseName == $release and ((.generatedAt | fromdateiso8601) <= now) and (now - (.generatedAt | fromdateiso8601) <= 86400)' \
-			"$RAW_V3_PREFLIGHT_REPORT" >/dev/null || fail 'RAW_V3_PREFLIGHT_REPORT is not a zero-blocker report for this exact target'
+		:
 	elif [ "$REINSTALL" = true ]; then
 		require CONFIRM_REINSTALL
 		[ "$CONFIRM_REINSTALL" = "$KUBE_CONTEXT/$NAMESPACE/$RELEASE_NAME" ] || fail 'CONFIRM_REINSTALL must exactly equal KUBE_CONTEXT/NAMESPACE/RELEASE_NAME'
@@ -239,6 +243,7 @@ if [ "$lifecycle_count" -eq 1 ]; then
 fi
 crd_count=0
 legacy_crd_count=0
+adopt_legacy_crds=false
 for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 	crd_state=$(kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" --ignore-not-found \
 		-o jsonpath='{.metadata.uid}{"|"}{.metadata.annotations.secretgenerator\.mittwald\.de/schema-release}')
@@ -265,6 +270,9 @@ fi
 if [ "$REINSTALL" = true ]; then
 	[ "$crd_count" -eq 3 ] && [ "$legacy_crd_count" -eq 0 ] || fail 'reinstall requires all three marked product CRDs'
 fi
+if [ "$RAW_V3_MIGRATION" = true ]; then
+	[ "$legacy_crd_count" -eq 3 ] || fail 'raw v3 migration requires all three exact unmarked legacy CRDs'
+fi
 if [ "$legacy_crd_count" -gt 0 ]; then
 	[ "$legacy_crd_count" -eq 3 ] || fail 'mixed marked and unmarked CRDs require manual review'
 	[ "$action" = upgrade ] || [ "$RAW_V3_MIGRATION" = true ] || fail 'unmarked CRDs cannot be adopted by a fresh install'
@@ -272,6 +280,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 	[ "$CONFIRM_LEGACY_CRD_ADOPTION" = v3.4.1 ] || fail 'CONFIRM_LEGACY_CRD_ADOPTION must exactly equal v3.4.1'
 	command -v jq >/dev/null 2>&1 || fail 'jq is required to verify legacy CRD identity'
 	command -v openssl >/dev/null 2>&1 || fail 'openssl is required to verify legacy CRD identity'
+	validate_legacy_preflight
 	for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 		case "$crd" in
 			basicauths.*) lock_key=crd.v3.4.1.basicauths.spec-sha256 ;;
@@ -284,6 +293,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			openssl dgst -sha256 -r | awk '{print $1}')
 		[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd is unmarked but does not match the pinned v3.4.1 CRD spec"
 	done
+	adopt_legacy_crds=true
 fi
 
 profile=${PROFILE:-production}
@@ -328,12 +338,11 @@ for crd_file in "$chart_dir"/crds/*_crd.yaml; do
 done >"$canonical_crds"
 cmp -s "$canonical_crds" "$crd_bundle" || fail 'packaged chart CRDs differ from the canonical generated CRDs'
 
-kubectl --context "$KUBE_CONTEXT" apply --server-side --dry-run=server \
-	--field-manager kubernetes-secret-generator-crd-manager \
-	--filename "$crd_bundle" >/dev/null
-kubectl --context "$KUBE_CONTEXT" apply --server-side \
-	--field-manager kubernetes-secret-generator-crd-manager \
-	--filename "$crd_bundle"
+set -- kubectl --context "$KUBE_CONTEXT" apply --server-side \
+	--field-manager kubernetes-secret-generator-crd-manager
+[ "$adopt_legacy_crds" = false ] || set -- "$@" --force-conflicts
+"$@" --dry-run=server --filename "$crd_bundle" >/dev/null
+"$@" --filename "$crd_bundle"
 for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 	kubectl --context "$KUBE_CONTEXT" wait --for=condition=Established --timeout=60s "customresourcedefinition/$crd"
 	case "$crd" in
