@@ -196,6 +196,7 @@ fi
 jq -e '.findings | any(.code == "ScopeConfirmationMissing")' "$tmp_dir/scope.json" >/dev/null
 
 ANNOTATION_REGENERATE=false
+SECURE_MARKER=present
 IMMUTABLE_SECRET=false
 BASELINE_MODE=valid
 READ_FAIL=
