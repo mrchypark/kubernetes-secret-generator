@@ -56,7 +56,11 @@ for contract in \
 	'--set-string image.digest=' \
 	'--set image.pullPolicy=IfNotPresent' \
 	'v3_install_diagnostics' \
+	'secret-generator.v1.mittwald.de/secure: "yes"' \
+	'annotate secret smoke-string secret-generator.v1.mittwald.de/secure=yes' \
 	'"$repo_root/scripts/preflight-v4.sh"' \
+	'REPORT_FORMAT=markdown REPORT_FILE="$preflight_report"' \
+	'read-only v4 preflight failed; sanitized report follows' \
 	'compatibilityProfile=$profile' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \

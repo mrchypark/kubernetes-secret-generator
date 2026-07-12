@@ -167,6 +167,7 @@ metadata:
   annotations:
     secret-generator.v1.mittwald.de/type: string
     secret-generator.v1.mittwald.de/autogenerate: token
+    secret-generator.v1.mittwald.de/secure: "yes"
 type: Opaque
 EOF
 
@@ -181,6 +182,11 @@ wait_secret() {
 	return 1
 }
 for name in smoke-string smoke-basic smoke-ssh smoke-annotation; do wait_secret "$name" || fail "v3 did not reconcile $name"; done
+# The v3 CRD controller generated StringSecret values with crypto/rand but did
+# not persist the marker used by the v4 migration preflight. Record that known
+# fixture provenance explicitly; real clusters require the same human review.
+k -n "$namespace" annotate secret smoke-string secret-generator.v1.mittwald.de/secure=yes --overwrite >/dev/null
+[ "$(k -n "$namespace" get secret smoke-string -o jsonpath='{.metadata.annotations.secret-generator\.v1\.mittwald\.de/secure}')" = yes ] || fail 'v3 StringSecret secure provenance marker was not established'
 secret_hash() { k -n "$namespace" get secret "$1" -o json | jq -cS .data | digest; }
 string_hash=$(secret_hash smoke-string)
 basic_hash=$(secret_hash smoke-basic)
@@ -203,21 +209,26 @@ assert_owners() {
 }
 assert_owners
 
-preflight=$workdir/preflight.json
-KUBECONFIG="$kubeconfig" KUBE_CONTEXT="$context" CONFIRM_CONTEXT="$context" \
+preflight_report=${PREFLIGHT_REPORT_OUT:-$workdir/preflight-report.md}
+case "$preflight_report" in /*) ;; *) fail 'PREFLIGHT_REPORT_OUT must be absolute' ;; esac
+[ ! -e "$preflight_report" ] || fail 'PREFLIGHT_REPORT_OUT already exists'
+if KUBECONFIG="$kubeconfig" KUBE_CONTEXT="$context" CONFIRM_CONTEXT="$context" \
 	EXPECTED_SERVER_URL="$server" EXPECTED_CA_SHA256="$ca_sha" NAMESPACE="$namespace" \
 	RELEASE_NAME="$release" DEPLOYMENT_NAME="$deployment" SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
-	"$repo_root/scripts/preflight-v4.sh" >"$preflight"
-[ "$(jq -r '.blockerCount' "$preflight")" -eq 0 ] || fail 'read-only v4 preflight reported blockers'
-if [ -n "${PREFLIGHT_REPORT_OUT:-}" ]; then
-	case "$PREFLIGHT_REPORT_OUT" in /*) ;; *) fail 'PREFLIGHT_REPORT_OUT must be absolute' ;; esac
-	[ ! -e "$PREFLIGHT_REPORT_OUT" ] || fail 'PREFLIGHT_REPORT_OUT already exists'
-	KUBECONFIG="$kubeconfig" KUBE_CONTEXT="$context" CONFIRM_CONTEXT="$context" \
-		EXPECTED_SERVER_URL="$server" EXPECTED_CA_SHA256="$ca_sha" NAMESPACE="$namespace" \
-		RELEASE_NAME="$release" DEPLOYMENT_NAME="$deployment" SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
-		REPORT_FORMAT=markdown REPORT_FILE="$PREFLIGHT_REPORT_OUT" \
-		"$repo_root/scripts/preflight-v4.sh" >/dev/null
+	REPORT_FORMAT=markdown REPORT_FILE="$preflight_report" \
+	"$repo_root/scripts/preflight-v4.sh" >/dev/null; then
+	:
+else
+	status=$?
+	if [ -s "$preflight_report" ]; then
+		printf '%s\n' 'read-only v4 preflight failed; sanitized report follows' >&2
+		cat "$preflight_report" >&2
+	else
+		printf '%s\n' 'read-only v4 preflight failed before producing a sanitized report' >&2
+	fi
+	exit "$status"
 fi
+grep -F -x -q -- '- Blockers: **0**' "$preflight_report" || fail 'read-only v4 preflight reported blockers'
 
 crds=$workdir/v4-crds.yaml
 helm show crds "$CHART_TGZ" >"$crds"

@@ -37,6 +37,7 @@ missing_concurrency() { sed -i.bak '/group: promote-/d' "$1/.github/workflows/re
 promotion_rebuild() { awk '{print} /scripts\/validate-release.sh/{print "          helm package deploy/helm-chart/kubernetes-secret-generator"}' "$1/.github/workflows/release-promote.yml" >"$1/workflow.tmp" && mv "$1/workflow.tmp" "$1/.github/workflows/release-promote.yml"; }
 missing_release_notes() { sed -i.bak 's/ --generate-notes//' "$1/.github/workflows/release-promote.yml"; }
 force_conflicts() { printf '\nkubectl apply --server-side --force-conflicts\n' >>"$1/scripts/helm-release.sh"; }
+raw_diagnostics_upload() { sed -i.bak 's#path: ${{ steps.scan_failure_diagnostics.outputs.path }}#path: preflight-report.md#' "$1/.github/workflows/release-candidate.yml"; }
 
 reject extra-workflow extra_workflow
 reject unpinned-action unpinned_action
@@ -48,5 +49,6 @@ reject missing-concurrency missing_concurrency
 reject promotion-rebuild promotion_rebuild
 reject missing-release-notes missing_release_notes
 reject force-conflicts force_conflicts
+reject raw-diagnostics-upload raw_diagnostics_upload
 
 echo 'supply-chain static negative fixtures passed'
