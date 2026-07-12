@@ -12,9 +12,9 @@ GitHub Environment.
    links to [migration](MIGRATION-v4.md), [backup/restore](BACKUP-RESTORE.md),
    [rollback](ROLLBACK.md), and [support status](SUPPORT.md), plus a checklist item for a
    redacted zero-blocker preflight report.
-3. Push the tag; that tag push starts the candidate workflow. It runs source/unit/race/envtest,
-   generated-artifact, Helm schema/render, module, vulnerability, image scan, SBOM, and
-   signature checks.
+3. Confirm the source, unit, race, and envtest checks have passed in PR or `master` CI, then
+   push the tag. The candidate workflow validates release inputs, builds and starts the image,
+   scans it, generates an SBOM, signs artifacts, packages the chart, and runs the kind smoke.
 4. Build `linux/amd64` and `linux/arm64` images and record the manifest-list digest, chart
    digest, source commit, workflow run link, and candidate artifact links in the issue.
 5. Do not use `latest`, rebuild the candidate during promotion, or place Secret values,

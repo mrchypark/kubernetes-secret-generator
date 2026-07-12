@@ -13,6 +13,8 @@ production-certification claims.
 - Generated credential drift and owned Secret deletion trigger self-heal with credential rotation.
 - Exact controller owner identity is required before a Secret can be modified.
 - Regeneration is idempotent once per CR generation; annotation values `true` and `yes` are equivalent.
+- CRDs support optional `spec.rotationInterval` credential rotation from `1m` to `8760h`; it is
+  disabled by default and safely coalesces missed intervals into one rotation.
 - Helm is the sole deployment source, namespace scope is the default, and images are deployed by digest.
 
 ### Security

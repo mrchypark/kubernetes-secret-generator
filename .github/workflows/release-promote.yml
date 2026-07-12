@@ -175,7 +175,7 @@ jobs:
             gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$release_asset" --dir existing-release
             test "sha256:$(sha256sum "existing-release/$release_asset" | awk '{print $1}')" = "$EXPECTED_CHART_SHA256" || { echo 'GitHub Release chart asset bytes mismatch' >&2; exit 1; }
           else
-            set -- gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$SOURCE_COMMIT" --title "$RELEASE_TAG" "$chart"
+            set -- gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$SOURCE_COMMIT" --title "$RELEASE_TAG" --generate-notes "$chart"
             case "$RELEASE_TAG" in *-rc.*) set -- "$@" --prerelease ;; esac
             "$@"
           fi

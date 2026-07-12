@@ -34,6 +34,7 @@ wrong_platforms() { sed -i.bak 's#platforms: linux/amd64,linux/arm64#platforms: 
 auto_promote() { sed -i.bak 's/workflow_dispatch:/push:/' "$1/.github/workflows/release-promote.yml"; }
 missing_concurrency() { sed -i.bak '/group: promote-/d' "$1/.github/workflows/release-promote.yml"; }
 promotion_rebuild() { awk '{print} /scripts\/validate-release.sh/{print "          helm package deploy/helm-chart/kubernetes-secret-generator"}' "$1/.github/workflows/release-promote.yml" >"$1/workflow.tmp" && mv "$1/workflow.tmp" "$1/.github/workflows/release-promote.yml"; }
+missing_release_notes() { sed -i.bak 's/ --generate-notes//' "$1/.github/workflows/release-promote.yml"; }
 force_conflicts() { printf '\nkubectl apply --server-side --force-conflicts\n' >>"$1/scripts/helm-release.sh"; }
 
 reject extra-workflow extra_workflow
@@ -43,6 +44,7 @@ reject wrong-platforms wrong_platforms
 reject auto-promote auto_promote
 reject missing-concurrency missing_concurrency
 reject promotion-rebuild promotion_rebuild
+reject missing-release-notes missing_release_notes
 reject force-conflicts force_conflicts
 
 echo 'supply-chain static negative fixtures passed'
