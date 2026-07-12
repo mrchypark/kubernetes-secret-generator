@@ -116,7 +116,8 @@ if [ "$action" = backup ]; then
 		resource_json sshkeypairs.secretgenerator.mittwald.de
 		resource_json secrets
 	} | jq -s --arg context "$KUBE_CONTEXT" --arg server "$server" --arg ca "$ca_sha" '
-      def cleanmeta: {name:.name,namespace:(.namespace // ""),labels:(.labels // {}),annotations:(.annotations // {})};
+      def stableannotations: (. // {}) | del(.["kubectl.kubernetes.io/last-applied-configuration"]);
+      def cleanmeta: {name:.name,namespace:(.namespace // ""),labels:(.labels // {}),annotations:(.annotations|stableannotations)};
       def cleancr: {apiVersion,kind,metadata:(.metadata|cleanmeta),spec};
       def cleansecret: {apiVersion:"v1",kind:"Secret",metadata:(.metadata|cleanmeta),type:(.type // "Opaque"),immutable:(.immutable // false),data:(.data // {})};
       .[0].items as $crds | (.[1].items + .[2].items + .[3].items) as $crs | .[4].items as $secrets |
@@ -196,7 +197,8 @@ for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mi
 	k wait --for=condition=Established --timeout=60s "customresourcedefinition/$crd" >/dev/null
 done
 
-"$ENCRYPTION_ADAPTER" decrypt <"$BACKUP_FILE" | jq -c '.crs[]' |
+"$ENCRYPTION_ADAPTER" decrypt <"$BACKUP_FILE" |
+jq -c '.crs[] | .metadata.annotations = ((.metadata.annotations // {}) | del(.["kubectl.kubernetes.io/last-applied-configuration"]))' |
 while IFS= read -r object; do
 	printf '%s\n' "$object" | k create -f - >/dev/null
 done
@@ -205,7 +207,7 @@ done
 while IFS= read -r encoded; do
 	record=$(printf '%s' "$encoded" | openssl base64 -d -A)
 	mode=$(printf '%s' "$record" | jq -r '.mode')
-	object=$(printf '%s' "$record" | jq -c '.object')
+	object=$(printf '%s' "$record" | jq -c '.object | .metadata.annotations = ((.metadata.annotations // {}) | del(.["kubectl.kubernetes.io/last-applied-configuration"]))')
 	if [ "$mode" = cr ]; then
 		kind=$(printf '%s' "$record" | jq -r '.owner.kind')
 		namespace=$(printf '%s' "$record" | jq -r '.owner.namespace')
@@ -241,13 +243,21 @@ while IFS= read -r encoded; do
 	{
 		printf '%s' "$record"
 		k -n "$namespace" get "secret/$name" -o json
-	} | jq -s -e --arg ownerUID "$owner_uid" '.[0] as $record | $record.object as $expected | .[1] as $actual |
+	} | jq -s -e --arg ownerUID "$owner_uid" '
+		def stableannotations: (. // {}) | del(.["kubectl.kubernetes.io/last-applied-configuration"]);
+		.[0] as $record | $record.object as $expected | .[1] as $actual |
 		$expected.data == $actual.data and $expected.type == $actual.type and
 		$expected.immutable == ($actual.immutable // false) and
 		$expected.metadata.labels == ($actual.metadata.labels // {}) and
-		$expected.metadata.annotations == ($actual.metadata.annotations // {}) and
+		($expected.metadata.annotations|stableannotations) == ($actual.metadata.annotations|stableannotations) and
 		(if $record.mode == "annotation" then (($actual.metadata.ownerReferences // [])|length)==0
-		 else any($actual.metadata.ownerReferences[]?; .apiVersion==$record.owner.apiVersion and .kind==$record.owner.kind and .name==$record.owner.name and .uid==$ownerUID and .controller==true) end)' >/dev/null || fail "restored Secret equality/owner check failed: $namespace/$name"
+		 else (($actual.metadata.ownerReferences // [])|length)==1 and
+			$actual.metadata.ownerReferences[0].apiVersion==$record.owner.apiVersion and
+			$actual.metadata.ownerReferences[0].kind==$record.owner.kind and
+			$actual.metadata.ownerReferences[0].name==$record.owner.name and
+			$actual.metadata.ownerReferences[0].uid==$ownerUID and
+			$actual.metadata.ownerReferences[0].controller==true and
+			$actual.metadata.ownerReferences[0].blockOwnerDeletion==true end)' >/dev/null || fail "restored Secret equality/owner check failed: $namespace/$name"
 done
 
 # POSIX pipelines may execute loops in subshells, so report the authoritative

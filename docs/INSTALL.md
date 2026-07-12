@@ -2,7 +2,7 @@
 
 ## Support and prerequisites
 
-The `v4.0.0-rc.10` candidate targets Kubernetes 1.34/1.35 APIs, Helm 3.14+, amd64,
+The `v4.0.0-rc.11` candidate targets Kubernetes 1.34/1.35 APIs, Helm 3.14+, amd64,
 and an arm64 image build plus `--help` startup check. These are candidate targets, not an SLA, capacity, HA, or production
 certification. The cluster should enforce Secret at-rest encryption and use a non-default
 namespace.
@@ -25,7 +25,7 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.10
+export CHART_VERSION=4.0.0-rc.11
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -42,15 +42,15 @@ The default `ownNamespace` scope is least privilege. For `namespaces` or `cluste
 
 ## Flux install
 
-Existing Flux installations may use the indexed [Flux example](examples/flux-helmrelease.yaml) as a starting point. Replace its zero Git commit and image digest with the exact candidate; the Git source uses `reconcileStrategy: Revision`. Keep Flux as the sole CRD manager. Flux is optional and its rehearsal is not a universal rc.10 promotion blocker.
+Existing Flux installations may use the indexed [Flux example](examples/flux-helmrelease.yaml) as a starting point. Replace its zero Git commit and image digest with the exact candidate; the Git source uses `reconcileStrategy: Revision`. Keep Flux as the sole CRD manager. Flux is optional and its rehearsal is not a universal rc.11 promotion blocker.
 
-Choose replica and topology settings for the target cluster. The rc.10 release process does
+Choose replica and topology settings for the target cluster. The rc.11 release process does
 not certify HA or make a PDB availability claim.
 
 Commit the reviewed HelmRelease and immutable source revision through the installation's
 normal GitOps process. Verify the three CRDs become `Established` before accepting the
 manager rollout. Do not use direct `kubectl apply` for CRDs in a Flux-managed installation.
-Flux compatibility is documented for existing consumers but is not exercised by the rc.10
+Flux compatibility is documented for existing consumers but is not exercised by the rc.11
 release automation.
 
 ## Uninstall
@@ -72,7 +72,7 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.10
+export CHART_VERSION=4.0.0-rc.11
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export EXPECTED_SERVER_URL='<exact-approved-api-server>'
@@ -94,7 +94,7 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.10
+export CHART_VERSION=4.0.0-rc.11
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export RAW_V3_MIGRATION=true

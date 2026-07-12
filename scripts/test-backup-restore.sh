@@ -45,7 +45,7 @@ JSON
   *"get secrets"*"-o json"*) cat <<'JSON'
 {"apiVersion":"v1","kind":"List","items":[
 {"apiVersion":"v1","kind":"Secret","metadata":{"namespace":"app","name":"login","labels":{"team":"test"},"annotations":{"tracking":"kept"},"ownerReferences":[{"apiVersion":"secretgenerator.mittwald.de/v1alpha1","kind":"StringSecret","name":"login","uid":"old-uid","controller":true}]},"type":"Opaque","immutable":false,"data":{"username":"c2VydmljZQ==","password":"S1NHX1RFU1RfU0VDUkVUX25ldmVyX3BsYWludGV4dA=="}},
-{"apiVersion":"v1","kind":"Secret","metadata":{"namespace":"app","name":"annotation","labels":{"team":"test"},"annotations":{"secret-generator.v1.mittwald.de/type":"string","secret-generator.v1.mittwald.de/autogenerate":"password"}},"type":"Opaque","immutable":false,"data":{"password":"S1NHX1RFU1RfU0VDUkVUX25ldmVyX3BsYWludGV4dA=="}}
+{"apiVersion":"v1","kind":"Secret","metadata":{"namespace":"app","name":"annotation","labels":{"team":"test"},"annotations":{"secret-generator.v1.mittwald.de/type":"string","secret-generator.v1.mittwald.de/autogenerate":"password","user.example/retained":"kept","kubectl.kubernetes.io/last-applied-configuration":"{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"metadata\":{\"name\":\"annotation\",\"namespace\":\"app\"},\"stringData\":{\"password\":\"source-form\"}}"}},"type":"Opaque","immutable":false,"data":{"password":"S1NHX1RFU1RfU0VDUkVUX25ldmVyX3BsYWludGV4dA=="}}
 ]}
 JSON
     ;;
@@ -64,9 +64,31 @@ JSON
     case "$kind" in
       StringSecret) jq '.metadata.uid="new-uid"' "$object" >"$STATE_DIR/cr-$name.json" ;;
       Secret)
-        if [ "${CORRUPT_CREATE:-false}" = true ]; then jq '.data={}' "$object" >"$STATE_DIR/secret-$name.json"
-        else cp "$object" "$STATE_DIR/secret-$name.json"
-        fi
+		if [ "$name" = annotation ]; then
+			jq '.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"]="{\"apiVersion\":\"v1\",\"data\":{\"password\":\"restored-form\"},\"kind\":\"Secret\",\"metadata\":{\"name\":\"annotation\",\"namespace\":\"app\"}}"' "$object" >"$STATE_DIR/secret-$name.json"
+		else
+			cp "$object" "$STATE_DIR/secret-$name.json"
+		fi
+		if [ "${CORRUPT_CREATE:-false}" = true ]; then
+			jq '.data={}' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" && mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"
+		fi
+		if [ "${CORRUPT_ANNOTATION:-false}" = true ]; then
+			jq '.metadata.annotations["user.example/retained"]="changed"' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" && mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"
+		fi
+		if [ "${CORRUPT_KSG_ANNOTATION:-false}" = true ]; then
+			jq '.metadata.annotations["secret-generator.v1.mittwald.de/type"]="changed"' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" && mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"
+		fi
+		if [ "$name" = login ]; then
+			case ${CORRUPT_OWNER:-} in
+				extra) jq '.metadata.ownerReferences += [{apiVersion:"v1",kind:"ConfigMap",name:"extra",uid:"extra",controller:false,blockOwnerDeletion:false}]' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				gc-false) jq '.metadata.ownerReferences[0].blockOwnerDeletion=false' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				gc-omitted) jq 'del(.metadata.ownerReferences[0].blockOwnerDeletion)' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				tuple) jq '.metadata.ownerReferences[0].name="mismatched"' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				'') : ;;
+				*) exit 70 ;;
+			esac
+			if [ -f "$STATE_DIR/secret-$name.tmp" ]; then mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"; fi
+		fi
         ;;
       *) exit 70 ;;
     esac
@@ -87,6 +109,14 @@ env $common $target BACKUP_CONFIRM=test/app/ksg "$repo_root/scripts/backup-resto
 # shellcheck disable=SC2086
 env $common "$repo_root/scripts/backup-restore.sh" verify >"$tmp_dir/verify-report.json"
 grep -q 'KSG_TEST_SECRET' "$backup" && { echo 'encrypted backup contains plaintext sentinel' >&2; exit 1; }
+"$tmp_dir/adapter" decrypt <"$backup" | jq -e '
+	all(.crs[].metadata.annotations, .secrets[].object.metadata.annotations;
+		has("kubectl.kubernetes.io/last-applied-configuration") | not) and
+	(.secrets[] | select(.object.metadata.name == "annotation") | .object.metadata.annotations) == {
+		"secret-generator.v1.mittwald.de/type":"string",
+		"secret-generator.v1.mittwald.de/autogenerate":"password",
+		"user.example/retained":"kept"
+	}' >/dev/null
 
 : >"$log"
 # shellcheck disable=SC2086
@@ -104,6 +134,13 @@ fi
 env $common $target RESTORE_CONFIRM=test/app/ksg \
 	TARGET_CRD_DIR="$repo_root/deploy/crds" "$repo_root/scripts/backup-restore.sh" restore >"$tmp_dir/restore-report.json"
 jq -e '.restored and .secretEquality and .secretCount == 2 and .controllerRemainsStopped' "$tmp_dir/restore-report.json" >/dev/null
+jq -e '
+	.metadata.labels == {"team":"test"} and
+	.metadata.annotations["secret-generator.v1.mittwald.de/type"] == "string" and
+	.metadata.annotations["secret-generator.v1.mittwald.de/autogenerate"] == "password" and
+	.metadata.annotations["user.example/retained"] == "kept" and
+	(.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"] | fromjson | has("data"))
+' "$state_dir/secret-annotation.json" >/dev/null
 if grep -q 'KSG_TEST_SECRET' "$tmp_dir"/*report.json; then echo 'backup report exposed plaintext' >&2; exit 1; fi
 
 # The fake API stores the actual create stdin. Corrupting that payload must make
@@ -116,6 +153,35 @@ if env $common $target CORRUPT_CREATE=true RESTORE_CONFIRM=test/app/ksg \
 	echo 'restore accepted a corrupted create payload' >&2
 	exit 1
 fi
+
+# Only kubectl's volatile last-applied annotation is excluded. Any mismatch in
+# user or KSG annotations must still fail the live equality check.
+rm -f "$state_dir"/*
+# shellcheck disable=SC2086
+if env $common $target CORRUPT_ANNOTATION=true RESTORE_CONFIRM=test/app/ksg \
+	TARGET_CRD_DIR="$repo_root/deploy/crds" "$repo_root/scripts/backup-restore.sh" restore >/dev/null 2>&1; then
+	echo 'restore accepted a changed user annotation' >&2
+	exit 1
+fi
+
+rm -f "$state_dir"/*
+# shellcheck disable=SC2086
+if env $common $target CORRUPT_KSG_ANNOTATION=true RESTORE_CONFIRM=test/app/ksg \
+	TARGET_CRD_DIR="$repo_root/deploy/crds" "$repo_root/scripts/backup-restore.sh" restore >/dev/null 2>&1; then
+	echo 'restore accepted a changed KSG annotation' >&2
+	exit 1
+fi
+
+for owner_corruption in extra gc-false gc-omitted tuple; do
+	rm -f "$state_dir"/*
+	# These variables intentionally contain multiple env NAME=value arguments.
+	# shellcheck disable=SC2086
+	if env $common $target CORRUPT_OWNER="$owner_corruption" RESTORE_CONFIRM=test/app/ksg \
+		TARGET_CRD_DIR="$repo_root/deploy/crds" "$repo_root/scripts/backup-restore.sh" restore >/dev/null 2>&1; then
+		echo "restore accepted CR-owned Secret owner corruption: $owner_corruption" >&2
+		exit 1
+	fi
+done
 
 # Invalid scope input must fail before any cluster mutation.
 : >"$log"
