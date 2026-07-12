@@ -20,6 +20,7 @@
 {{- end -}}
 
 {{- define "kubernetes-secret-generator.selectorLabels" -}}
+name: {{ include "kubernetes-secret-generator.name" . }}
 app.kubernetes.io/name: {{ include "kubernetes-secret-generator.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
