@@ -45,4 +45,38 @@ helm template n1 "$tmpdir/deploy/helm-chart/kubernetes-secret-generator" --names
 	--set-string "image.tag=v3.4.1@$n1_digest" >"$tmpdir/rendered.yaml"
 grep -F -q "image: ghcr.io/mrchypark/kubernetes-secret-generator:v3.4.1@$n1_digest" "$tmpdir/rendered.yaml" || fail 'N-1 digest-pinned image does not render exactly'
 
+extract_deployment() {
+	awk '
+		/^---$/ { if (deployment) printf "%s", document; document=""; deployment=0; next }
+		{ document=document $0 "\n" }
+		$0 == "kind: Deployment" { deployment=1 }
+		END { if (deployment) printf "%s", document }
+	' "$1" >"$2"
+	[ -s "$2" ] || fail "rendered chart has no Deployment: $1"
+}
+
+current_chart=$repo_root/deploy/helm-chart/kubernetes-secret-generator
+helm template n1 "$current_chart" --namespace ksg-system --set profile=dev \
+	--set-string "image.digest=${n1_digest#*@}" >"$tmpdir/current-fresh.yaml"
+helm template n1 "$current_chart" --namespace ksg-system --is-upgrade --set profile=dev \
+	--set migration.confirmedScope=ownNamespace --set-string "image.digest=${n1_digest#*@}" >"$tmpdir/current-upgrade.yaml"
+for render in rendered current-fresh current-upgrade; do
+	extract_deployment "$tmpdir/$render.yaml" "$tmpdir/$render-deployment.yaml"
+	helm template yaml-normalizer "$repo_root/test/fixtures/yaml-normalizer" \
+		--set-file input="$tmpdir/$render-deployment.yaml" --show-only templates/normalize.yaml |
+		sed -n '/^{/p' >"$tmpdir/$render-deployment.json"
+done
+jq -e '.spec.selector.matchLabels == {
+	"name":"kubernetes-secret-generator",
+	"app.kubernetes.io/name":"kubernetes-secret-generator",
+	"app.kubernetes.io/instance":"n1"
+}' "$tmpdir/rendered-deployment.json" >/dev/null || fail 'pinned v3.4.1 selector fixture is unexpected'
+for render in current-fresh current-upgrade; do
+	jq -e --slurpfile legacy "$tmpdir/rendered-deployment.json" '
+		.spec.selector == $legacy[0].spec.selector and
+		(. as $deployment | [$deployment.spec.selector.matchLabels | to_entries[] | . as $entry |
+			$deployment.spec.template.metadata.labels[$entry.key] == $entry.value] | all)' \
+		"$tmpdir/$render-deployment.json" >/dev/null || fail "$render Deployment selector is not v3.4.1-compatible"
+done
+
 printf 'N-1 CRD fixture verification passed\n'

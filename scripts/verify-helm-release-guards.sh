@@ -26,7 +26,7 @@ case "$1" in
 	template) printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.8.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.9.tgz"; break; fi
 			shift
 		done
 		;;
@@ -111,7 +111,7 @@ common_env() {
 	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.8 \
+		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.9 \
 		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
 }
 
@@ -191,7 +191,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.8\townNamespace\t\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.9\townNamespace\t\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -214,7 +214,7 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.8\townNamespace\t\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.9\townNamespace\t\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null

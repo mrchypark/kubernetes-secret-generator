@@ -14,6 +14,12 @@ upgrading an existing installation. Create the encrypted backup first.
 6. Observe the amd64 candidate for 10–15 minutes. Build the arm64 image and verify its
    `--help` startup command. This is candidate validation, not a capacity or SLA claim.
 
+The v4 Deployment intentionally retains the three-label v3.4.1 selector (`name`,
+`app.kubernetes.io/name`, and `app.kubernetes.io/instance`) because selectors are immutable.
+Chart/version/management labels remain non-selector Deployment metadata, while Pod metadata
+retains the compatible recommended name and instance labels. No live selector migration or
+resource recreation is required.
+
 Direct Helm upgrade:
 
 ```sh
@@ -21,7 +27,7 @@ export KUBE_CONTEXT=approved-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.8
+export CHART_VERSION=4.0.0-rc.9
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -43,7 +49,7 @@ resourceVersion before establishing normal non-forcing SSA ownership. Concurrent
 the replacement. CRDs are updated in place and retained during manager rollback.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
-before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.8 release
+before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.9 release
 blocker. Never switch CRD managers during the controller upgrade.
 
 ## Rollback
