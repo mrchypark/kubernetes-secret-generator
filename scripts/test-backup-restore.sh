@@ -78,6 +78,17 @@ JSON
 		if [ "${CORRUPT_KSG_ANNOTATION:-false}" = true ]; then
 			jq '.metadata.annotations["secret-generator.v1.mittwald.de/type"]="changed"' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" && mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"
 		fi
+		if [ "$name" = login ]; then
+			case ${CORRUPT_OWNER:-} in
+				extra) jq '.metadata.ownerReferences += [{apiVersion:"v1",kind:"ConfigMap",name:"extra",uid:"extra",controller:false,blockOwnerDeletion:false}]' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				gc-false) jq '.metadata.ownerReferences[0].blockOwnerDeletion=false' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				gc-omitted) jq 'del(.metadata.ownerReferences[0].blockOwnerDeletion)' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				tuple) jq '.metadata.ownerReferences[0].name="mismatched"' "$STATE_DIR/secret-$name.json" >"$STATE_DIR/secret-$name.tmp" ;;
+				'') : ;;
+				*) exit 70 ;;
+			esac
+			if [ -f "$STATE_DIR/secret-$name.tmp" ]; then mv "$STATE_DIR/secret-$name.tmp" "$STATE_DIR/secret-$name.json"; fi
+		fi
         ;;
       *) exit 70 ;;
     esac
@@ -160,6 +171,17 @@ if env $common $target CORRUPT_KSG_ANNOTATION=true RESTORE_CONFIRM=test/app/ksg 
 	echo 'restore accepted a changed KSG annotation' >&2
 	exit 1
 fi
+
+for owner_corruption in extra gc-false gc-omitted tuple; do
+	rm -f "$state_dir"/*
+	# These variables intentionally contain multiple env NAME=value arguments.
+	# shellcheck disable=SC2086
+	if env $common $target CORRUPT_OWNER="$owner_corruption" RESTORE_CONFIRM=test/app/ksg \
+		TARGET_CRD_DIR="$repo_root/deploy/crds" "$repo_root/scripts/backup-restore.sh" restore >/dev/null 2>&1; then
+		echo "restore accepted CR-owned Secret owner corruption: $owner_corruption" >&2
+		exit 1
+	fi
+done
 
 # Invalid scope input must fail before any cluster mutation.
 : >"$log"

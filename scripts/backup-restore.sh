@@ -251,7 +251,13 @@ while IFS= read -r encoded; do
 		$expected.metadata.labels == ($actual.metadata.labels // {}) and
 		($expected.metadata.annotations|stableannotations) == ($actual.metadata.annotations|stableannotations) and
 		(if $record.mode == "annotation" then (($actual.metadata.ownerReferences // [])|length)==0
-		 else any($actual.metadata.ownerReferences[]?; .apiVersion==$record.owner.apiVersion and .kind==$record.owner.kind and .name==$record.owner.name and .uid==$ownerUID and .controller==true) end)' >/dev/null || fail "restored Secret equality/owner check failed: $namespace/$name"
+		 else (($actual.metadata.ownerReferences // [])|length)==1 and
+			$actual.metadata.ownerReferences[0].apiVersion==$record.owner.apiVersion and
+			$actual.metadata.ownerReferences[0].kind==$record.owner.kind and
+			$actual.metadata.ownerReferences[0].name==$record.owner.name and
+			$actual.metadata.ownerReferences[0].uid==$ownerUID and
+			$actual.metadata.ownerReferences[0].controller==true and
+			$actual.metadata.ownerReferences[0].blockOwnerDeletion==true end)' >/dev/null || fail "restored Secret equality/owner check failed: $namespace/$name"
 done
 
 # POSIX pipelines may execute loops in subshells, so report the authoritative
