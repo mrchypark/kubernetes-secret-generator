@@ -52,7 +52,7 @@ jobs:
             crd/basicauths.secretgenerator.mittwald.de \
             crd/sshkeypairs.secretgenerator.mittwald.de \
             crd/stringsecrets.secretgenerator.mittwald.de >/dev/null
-          kubectl get crd basicauths.secretgenerator.mittwald.de -o json | jq -c \
+          kubectl get crd basicauths.secretgenerator.mittwald.de --show-managed-fields=true -o json | jq -c \
             '[.metadata.managedFields[] | {manager,operation,apiVersion,subresource:(.subresource // ""),fieldPaths:([(.fieldsV1 // {}) | paths | map(tostring) | join(".")] | sort)}]'
 
       - name: Verify source
