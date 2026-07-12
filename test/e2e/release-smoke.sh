@@ -85,6 +85,14 @@ for image in "$CANDIDATE_IMAGE" "$V3_COMPAT_IMAGE"; do
 	docker pull --platform linux/amd64 "$image" >/dev/null
 	[ "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64 ] || fail "image is not amd64: $image"
 done
+candidate_image_id=$(docker image inspect --format '{{.Id}}' "$CANDIDATE_IMAGE")
+v3_image_id=$(docker image inspect --format '{{.Id}}' "$V3_COMPAT_IMAGE")
+candidate_local_image=ksg-release-candidate:$run_id
+v3_local_image=ksg-release-v3:$run_id
+docker image tag "$CANDIDATE_IMAGE" "$candidate_local_image"
+docker image tag "$V3_COMPAT_IMAGE" "$v3_local_image"
+[ "$(docker image inspect --format '{{.Id}}' "$candidate_local_image")" = "$candidate_image_id" ] || fail 'candidate local tag does not match exact candidate image ID'
+[ "$(docker image inspect --format '{{.Id}}' "$v3_local_image")" = "$v3_image_id" ] || fail 'v3 local tag does not match exact v3 image ID'
 chart_digest=$(file_digest "$CHART_TGZ")
 [ "$(helm show chart "$CHART_TGZ" | awk '$1=="version:" {print $2}')" = "${RELEASE_TAG#v}" ] || fail 'CHART_TGZ version differs from RELEASE_TAG'
 [ -n "$(helm show crds "$CHART_TGZ")" ] || fail 'CHART_TGZ must contain the v4 CRDs'
@@ -113,8 +121,8 @@ k label namespace kube-system "ksg-test-owner=$run_id" --overwrite >/dev/null
 k create namespace "$namespace" >/dev/null
 k label namespace "$namespace" "ksg-test-owner=$run_id" pod-security.kubernetes.io/warn=restricted >/dev/null
 [ "$(k get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')" = amd64 ] || fail 'kind node is not amd64'
-kind load docker-image "$V3_COMPAT_IMAGE" --name "$cluster" >/dev/null
-kind load docker-image "$CANDIDATE_IMAGE" --name "$cluster" >/dev/null
+kind load docker-image "$v3_local_image" --name "$cluster" >/dev/null
+kind load docker-image "$candidate_local_image" --name "$cluster" >/dev/null
 
 v3_tree=$workdir/v3
 mkdir "$v3_tree"
@@ -127,9 +135,9 @@ k wait --for=condition=Established --timeout=60s \
 if ! helm install "$release" "$v3_tree/deploy/helm-chart/kubernetes-secret-generator" \
 	--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace" \
 	--set installCRDs=true --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
-	--set image.registry=ghcr.io --set image.repository=mrchypark/kubernetes-secret-generator \
+	--set image.registry= --set image.repository=ksg-release-v3 \
 	--set image.pullPolicy=IfNotPresent \
-	--set-string "image.tag=${V3_COMPAT_IMAGE#ghcr.io/mrchypark/kubernetes-secret-generator:}" \
+	--set-string "image.tag=$run_id" \
 	--wait --timeout 180s >/dev/null; then
 	v3_install_diagnostics
 	fail 'v3 Helm install failed'
@@ -220,7 +228,9 @@ k wait --for=condition=Established --timeout=60s \
 	crd/stringsecrets.secretgenerator.mittwald.de >/dev/null
 
 upgrade_manager() {
-	profile=$1 image_digest=$2 reuse=${3:-false}
+	profile=$1 local_image=$2 reuse=${3:-false}
+	image_repository=${local_image%:*}
+	image_tag=${local_image##*:}
 	reuse_flag=
 	[ "$reuse" = false ] || reuse_flag=--reuse-values
 	# shellcheck disable=SC2086 # Empty or the single constant --reuse-values.
@@ -229,8 +239,9 @@ upgrade_manager() {
 		--set profile=dev --set replicaCount=1 --set scope.mode=ownNamespace \
 		--set migration.confirmedScope=ownNamespace --set crdLifecycle.manager=direct \
 		--set leaderElection.enabled=true --set leaderElection.id=kubernetes-secret-generator-lock \
-		--set "compatibilityProfile=$profile" --set image.registry=ghcr.io \
-		--set image.repository=mrchypark/kubernetes-secret-generator --set-string image.digest="$image_digest" \
+		--set "compatibilityProfile=$profile" --set image.registry= \
+		--set-string image.repository="$image_repository" --set-string image.tag="$image_tag" \
+		--set-string image.digest= --set image.pullPolicy=IfNotPresent \
 		--wait --timeout 180s >/dev/null
 	k -n "$namespace" rollout status deployment/"$deployment" --timeout=180s >/dev/null
 	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WATCH_NAMESPACE")].value}')" = "$namespace" ] || fail 'manager scope changed'
@@ -261,7 +272,7 @@ assert_recovery_state() {
 	[ "$(secret_hash smoke-string)$(secret_hash smoke-basic)$(secret_hash smoke-ssh)$(secret_hash smoke-annotation)" = "$string_hash$basic_hash$ssh_hash$annotation_hash" ] || fail 'observed recovery state changed a credential'
 }
 
-upgrade_manager v4 "$candidate_digest" false
+upgrade_manager v4 "$candidate_local_image" false
 for resource in stringsecret/smoke-string basicauth/smoke-basic sshkeypair/smoke-ssh; do
 	k -n "$namespace" wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' "$resource" --timeout=60s >/dev/null
 done
@@ -312,7 +323,7 @@ basic_hash=$healed_hash
 
 crd_hash=$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)
 counts=$(k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json | jq -c '[.items|group_by(.kind)|map({(.[0].kind):length})|add]')
-upgrade_manager v3.4.1 "$v3_digest" true
+upgrade_manager v3.4.1 "$v3_local_image" true
 [ "$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)" = "$crd_hash" ] || fail 'manager rollback changed v4 CRDs'
 [ "$(k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json | jq -c '[.items|group_by(.kind)|map({(.[0].kind):length})|add]')" = "$counts" ] || fail 'manager rollback changed object counts'
 [ "$(secret_hash smoke-string)" = "$string_hash" ] || fail 'manager rollback rotated StringSecret'
@@ -320,7 +331,7 @@ upgrade_manager v3.4.1 "$v3_digest" true
 [ "$(secret_hash smoke-ssh)" = "$ssh_hash" ] || fail 'manager rollback rotated SSHKeyPair'
 [ "$(secret_hash smoke-annotation)" = "$annotation_hash" ] || fail 'manager rollback rotated annotation String Secret'
 
-upgrade_manager v4 "$candidate_digest" true
+upgrade_manager v4 "$candidate_local_image" true
 for resource in stringsecret/smoke-string basicauth/smoke-basic sshkeypair/smoke-ssh; do
 	k -n "$namespace" wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' "$resource" --timeout=60s >/dev/null
 done
