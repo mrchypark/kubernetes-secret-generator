@@ -21,7 +21,6 @@
            .metadata.name == "smoke-ssh" or
            .metadata.name == "smoke-annotation") or
           any(.metadata.ownerReferences[]?;
-            (.controller // false) == true and
             (.uid as $owner_uid | $fixture_cr_uids | index($owner_uid) != null))
         )
       )
