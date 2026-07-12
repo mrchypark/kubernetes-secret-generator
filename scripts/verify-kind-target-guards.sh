@@ -50,6 +50,8 @@ for contract in \
 	'V3_COMPAT_IMAGE differs from the locked amd64 v3.4.1 image' \
 	'"$repo_root/scripts/preflight-v4.sh"' \
 	'compatibilityProfile=$profile' \
+	'BasicAuth self-heal did not rotate credentials' \
+	'basic_hash=$healed_hash' \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done

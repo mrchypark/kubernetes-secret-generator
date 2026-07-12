@@ -273,16 +273,28 @@ string_hash=$(secret_hash smoke-string)
 
 k -n "$namespace" patch secret smoke-basic --type merge -p '{"data":{"password":"ZHJpZnQ="}}' >/dev/null
 healed=false
+healed_hash=
 i=0
 while [ "$i" -lt 60 ]; do
-	if [ "$(secret_hash smoke-basic)" = "$basic_hash" ]; then healed=true; break; fi
+	current_hash=$(secret_hash smoke-basic)
+	drift_removed=$(k -n "$namespace" get secret smoke-basic -o json | jq -r '.data.password != null and .data.password != "ZHJpZnQ="')
+	if [ "$current_hash" != "$basic_hash" ] && [ "$drift_removed" = true ]; then
+		healed_hash=$current_hash
+		healed=true
+		break
+	fi
 	sleep 1
 	i=$((i + 1))
 done
 [ "$healed" = true ] || fail 'BasicAuth drift was not healed'
+k -n "$namespace" wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' basicauth/smoke-basic --timeout=10s >/dev/null
+assert_owner basicauth smoke-basic BasicAuth
+[ "$healed_hash" != "$basic_hash" ] || fail 'BasicAuth self-heal did not rotate credentials'
 stable_rv=$(k -n "$namespace" get secret smoke-basic -o jsonpath='{.metadata.resourceVersion}')
 sleep 5
 [ "$(k -n "$namespace" get secret smoke-basic -o jsonpath='{.metadata.resourceVersion}')" = "$stable_rv" ] || fail 'BasicAuth self-heal caused an update storm'
+[ "$(secret_hash smoke-basic)" = "$healed_hash" ] || fail 'BasicAuth self-heal did not become stable'
+basic_hash=$healed_hash
 
 crd_hash=$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)
 counts=$(k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json | jq -c '[.items|group_by(.kind)|map({(.[0].kind):length})|add]')
