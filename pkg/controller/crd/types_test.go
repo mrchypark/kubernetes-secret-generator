@@ -2,6 +2,7 @@ package crd
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -109,6 +110,59 @@ func TestRegenerationMarker(t *testing.T) {
 	secret.Annotations[AnnotationLastRegenerated] = "4"
 	_, err = ParseRegenerationMarker(secret, 3)
 	require.Error(t, err)
+}
+
+func TestRotationIntervalAndSchedule(t *testing.T) {
+	for _, value := range []string{"", "1m", "90m", "8760h"} {
+		_, err := ParseRotationInterval(value)
+		require.NoError(t, err, value)
+	}
+	for _, value := range []string{"bad", "0s", "-1m", "59s", "8761h"} {
+		_, err := ParseRotationInterval(value)
+		require.Error(t, err, value)
+	}
+
+	now := time.Date(2026, 7, 12, 12, 0, 0, 123, time.FixedZone("test", 9*60*60))
+	secret := &corev1.Secret{}
+	due, after, anchored, err := RotationSchedule(secret, time.Hour, now)
+	require.NoError(t, err)
+	require.False(t, due)
+	require.False(t, anchored)
+	require.Equal(t, time.Hour, after)
+
+	SetRotationAnchor(secret, now)
+	require.Equal(t, now.UTC().Format(time.RFC3339Nano), secret.Annotations[AnnotationRotationAnchor])
+	for _, tt := range []struct {
+		name      string
+		interval  time.Duration
+		now       time.Time
+		wantDue   bool
+		wantAfter time.Duration
+	}{
+		{name: "same interval", interval: time.Hour, now: now.Add(15 * time.Minute), wantAfter: 45 * time.Minute},
+		{name: "shorter interval is due", interval: 10 * time.Minute, now: now.Add(15 * time.Minute), wantDue: true},
+		{name: "longer interval reuses anchor", interval: 2 * time.Hour, now: now.Add(15 * time.Minute), wantAfter: 105 * time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			due, after, anchored, err := RotationSchedule(secret, tt.interval, tt.now)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantDue, due)
+			require.True(t, anchored)
+			require.Equal(t, tt.wantAfter, after)
+		})
+	}
+
+	due, after, anchored, err = RotationSchedule(secret, 0, now.Add(time.Hour))
+	require.NoError(t, err)
+	require.False(t, due)
+	require.False(t, anchored)
+	require.Zero(t, after)
+
+	secret.Annotations[AnnotationRotationAnchor] = "invalid"
+	_, _, _, err = RotationSchedule(secret, time.Hour, now)
+	require.Error(t, err)
+	ClearRotationAnchor(secret)
+	require.NotContains(t, secret.Annotations, AnnotationRotationAnchor)
 }
 
 func TestPatchSecretRejectsTypeMutationBeforeClientCall(t *testing.T) {

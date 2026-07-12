@@ -256,6 +256,13 @@ func TestPatchSecretLifecycle(t *testing.T) {
 	require.NoError(t, kube.Get(t.Context(), client.ObjectKeyFromObject(existing), updated))
 	require.True(t, bytes.Equal([]byte("new"), updated.Data["value"]))
 
+	staleDesired := stored.DeepCopy()
+	staleDesired.Data["value"] = []byte("stale")
+	wrote, err = (&Client{Client: kube}).PatchSecret(t.Context(), stored, staleDesired)
+	require.Error(t, err)
+	require.True(t, wrote)
+	require.True(t, apierrors.IsConflict(err))
+
 	missing := existing.DeepCopy()
 	missing.Name = "missing"
 	missingDesired := missing.DeepCopy()

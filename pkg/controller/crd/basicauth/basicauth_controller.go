@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -32,13 +33,14 @@ const credentialFingerprint = "credential-set"
 
 func Add(mgr manager.Manager) error { return add(mgr, NewReconciler(mgr)) }
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileBasicAuth{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("basicauth-controller")} //nolint:staticcheck // Event recorder API migration is deferred to M2.
+	return &ReconcileBasicAuth{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("basicauth-controller"), clock: time.Now} //nolint:staticcheck // Event recorder API migration is deferred to M2.
 }
 
 type ReconcileBasicAuth struct {
 	client   client.Client
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
+	clock    func() time.Time
 }
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
@@ -93,9 +95,14 @@ type basicPlan struct {
 	passwordLength       int
 	fingerprint          string
 	literalKeys, allKeys []string
+	interval             time.Duration
 }
 
 func basicPlanFor(instance *v1alpha1.BasicAuth) (*basicPlan, error) {
+	interval, err := crd.ParseRotationInterval(instance.Spec.RotationInterval)
+	if err != nil {
+		return nil, err
+	}
 	literal := make(map[string][]byte, len(instance.Spec.Data))
 	for key, value := range instance.Spec.Data {
 		literal[key] = []byte(value)
@@ -124,7 +131,7 @@ func basicPlanFor(instance *v1alpha1.BasicAuth) (*basicPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &basicPlan{constraints: cons, passwordLength: lengths[secret.FieldBasicAuthPassword], literalKeys: crd.StringMapKeys(instance.Spec.Data)}
+	p := &basicPlan{constraints: cons, passwordLength: lengths[secret.FieldBasicAuthPassword], literalKeys: crd.StringMapKeys(instance.Spec.Data), interval: interval}
 	p.allKeys = append(append([]string(nil), p.literalKeys...), secret.FieldBasicAuthIngress, secret.FieldBasicAuthUsername, secret.FieldBasicAuthPassword)
 	p.fingerprint = crd.Fingerprint([]byte(strconv.Itoa(parsed)), []byte(strconv.FormatBool(byteLength)), []byte(encoding), []byte(username))
 	return p, nil
@@ -138,6 +145,9 @@ func (r *ReconcileBasicAuth) create(ctx context.Context, instance *v1alpha1.Basi
 	}
 	crd.ApplyManagedData(target, instance.Spec.Data, p.allKeys, nil)
 	crd.SetRegenerationMarker(target, instance.Generation)
+	if p.interval > 0 {
+		crd.SetRotationAnchor(target, r.now())
+	}
 	t := p.tracking(instance)
 	crd.ReserveChecksums(t)
 	crd.StoreTracking(target, t)
@@ -162,7 +172,7 @@ func (r *ReconcileBasicAuth) create(ctx context.Context, instance *v1alpha1.Basi
 		controllerobservability.ObserveDomainOutcome(controllerobservability.ControllerBasicAuth, "create", "success", v1alpha1.ReasonReconciled)
 	}
 	logger.Info("created managed Secret")
-	return crd.ReadyStatus(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation))
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation), p.interval)
 }
 
 func (r *ReconcileBasicAuth) update(ctx context.Context, instance *v1alpha1.BasicAuth, existing *corev1.Secret, p *basicPlan, logger logr.Logger) (reconcile.Result, error) {
@@ -171,15 +181,34 @@ func (r *ReconcileBasicAuth) update(ctx context.Context, instance *v1alpha1.Basi
 	}
 	t, state, trackingErr := crd.LoadTracking(existing)
 	suspiciousTracking := controllerobservability.HasSuspiciousCandidate(ctx, "secret_drift")
+	now := r.now()
+	due, requeueAfter, anchored, scheduleErr := crd.RotationSchedule(existing, p.interval, now)
+	if scheduleErr != nil {
+		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, scheduleErr.Error(), instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
+	}
 	if crd.IsImmutable(existing) {
-		if suspiciousTracking || state != crd.TrackingValid || !p.immutableCurrent(instance, existing, t) {
+		if suspiciousTracking || state != crd.TrackingValid || due || !p.immutableCurrent(instance, existing, t) {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonImmutableSecretConflict, "immutable Secret requires reconciliation", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
 		}
 		marker, err := crd.ParseRegenerationMarker(existing, instance.Generation)
 		if err != nil {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonRegenerationStateConflict, err.Error(), instance.Status.TrackingInitialized, -1)
 		}
-		return crd.ReadyStatus(ctx, r.client, instance, existing, marker)
+		if p.interval > 0 && !anchored || p.interval == 0 && existing.Annotations[crd.AnnotationRotationAnchor] != "" {
+			target := existing.DeepCopy()
+			if p.interval > 0 {
+				crd.SetRotationAnchor(target, now)
+				requeueAfter = p.interval
+			} else {
+				crd.ClearRotationAnchor(target)
+			}
+			cc := crd.Client{Client: r.client}
+			if _, err = cc.PatchSecret(ctx, existing, target); err != nil {
+				return crd.ApplyFailure(ctx, r.client, instance, existing, err)
+			}
+			return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+		}
+		return crd.ReadyStatusAfter(ctx, r.client, instance, existing, marker, requeueAfter)
 	}
 	if suspiciousTracking {
 		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, "data and controller tracking changed outside an observed controller write", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
@@ -220,7 +249,7 @@ func (r *ReconcileBasicAuth) update(ctx context.Context, instance *v1alpha1.Basi
 	}
 	crd.ApplyManagedData(target, instance.Spec.Data, p.allKeys, previous)
 	crd.ApplyManagedLabels(target, instance.Labels, t.LabelKeys)
-	rotate := force || t.Fingerprints[credentialFingerprint] != p.fingerprint
+	rotate := due || force || t.Fingerprints[credentialFingerprint] != p.fingerprint
 	for _, key := range []string{secret.FieldBasicAuthIngress, secret.FieldBasicAuthUsername, secret.FieldBasicAuthPassword} {
 		if t.Checksums[key] != crd.DataChecksum(key, existing.Data[key]) {
 			rotate = true
@@ -230,6 +259,15 @@ func (r *ReconcileBasicAuth) update(ctx context.Context, instance *v1alpha1.Basi
 	if force {
 		crd.SetRegenerationMarker(target, instance.Generation)
 		marker = instance.Generation
+	}
+	if p.interval > 0 {
+		if !anchored || rotate {
+			crd.SetRotationAnchor(target, now)
+			requeueAfter = p.interval
+		}
+	} else {
+		crd.ClearRotationAnchor(target)
+		requeueAfter = 0
 	}
 	crd.ReserveChecksums(next)
 	crd.StoreTracking(target, next)
@@ -258,7 +296,14 @@ func (r *ReconcileBasicAuth) update(ctx context.Context, instance *v1alpha1.Basi
 			controllerobservability.RecordRegenerated(ctx, instance)
 		}
 	}
-	return crd.ReadyStatus(ctx, r.client, instance, target, marker)
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+}
+
+func (r *ReconcileBasicAuth) now() time.Time {
+	if r.clock == nil {
+		return time.Now()
+	}
+	return r.clock()
 }
 
 func (p *basicPlan) tracking(instance *v1alpha1.BasicAuth) *crd.Tracking {

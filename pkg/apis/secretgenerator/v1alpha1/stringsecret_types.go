@@ -8,6 +8,8 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(self.data) || !has(self.fields) || self.fields.all(f, !(f.fieldName in self.data))",message="generated fieldName values must not collide with data keys"
 // +kubebuilder:validation:XValidation:rule="(has(self.data) ? size(self.data) : 0) + (has(self.fields) ? size(self.fields) : 0) <= 256",message="data and fields may manage at most 256 keys"
 // +kubebuilder:validation:XValidation:rule="(has(oldSelf.type) && oldSelf.type.size() > 0 ? oldSelf.type : 'Opaque') == (has(self.type) && self.type.size() > 0 ? self.type : 'Opaque')",message="type is immutable after creation; omitted, empty, and Opaque are equivalent"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (duration(self.rotationInterval) >= duration('1m') && duration(self.rotationInterval) <= duration('8760h'))",message="rotationInterval must be a Go duration between 1m and 8760h"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (has(self.fields) && self.fields.size() > 0)",message="rotationInterval requires at least one generated field"
 type StringSecretSpec struct {
 	// +optional
 	Type string `json:"type,omitempty"`
@@ -17,6 +19,11 @@ type StringSecretSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// RotationInterval periodically rotates generated fields. It uses Go duration
+	// syntax; an empty value disables periodic rotation.
+	// +optional
+	// +kubebuilder:validation:MaxLength=32
+	RotationInterval string `json:"rotationInterval,omitempty"`
 	// +optional
 	// +kubebuilder:validation:MaxItems=64
 	Fields []Field `json:"fields,omitempty"`

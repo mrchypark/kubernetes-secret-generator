@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -68,6 +69,47 @@ func TestReconcileConvergesAndSelfHeals(t *testing.T) {
 	require.False(t, bytes.Equal(repaired.Data["first"], recreated.Data["first"]))
 	_, exists := recreated.Data["unmanaged"]
 	require.False(t, exists)
+}
+
+func TestStringSecretRotationInterval(t *testing.T) {
+	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.SchemeBuilder.AddToScheme(scheme))
+	instance := &v1alpha1.StringSecret{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.SchemeGroupVersion.String(), Kind: Kind},
+		ObjectMeta: metav1.ObjectMeta{Name: "scheduled-string", Namespace: "default", UID: "owner", Generation: 1},
+		Spec:       v1alpha1.StringSecretSpec{Data: map[string]string{"literal": "stable"}, Fields: []v1alpha1.Field{{FieldName: "one", Length: "24", Encoding: "base64"}, {FieldName: "two", Length: "24", Encoding: "base64"}}, RotationInterval: "1h"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(instance).WithObjects(instance).Build()
+	r := &ReconcileStringSecret{client: cl, scheme: scheme, clock: func() time.Time { return now }}
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(instance)}
+	result, err := r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	managed := &corev1.Secret{}
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, managed))
+	one, two := append([]byte(nil), managed.Data["one"]...), append([]byte(nil), managed.Data["two"]...)
+
+	now = now.Add(time.Hour)
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, managed))
+	require.NotEqual(t, one, managed.Data["one"])
+	require.NotEqual(t, two, managed.Data["two"])
+	require.Equal(t, "stable", string(managed.Data["literal"]))
+	require.Equal(t, "1", managed.Annotations[crd.AnnotationLastRegenerated])
+	after := append([]byte(nil), managed.Data["one"]...)
+	_, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, managed))
+	require.Equal(t, after, managed.Data["one"])
+}
+
+func TestStringSecretRotationIntervalRequiresGeneratedField(t *testing.T) {
+	_, err := stringPlanFor(&v1alpha1.StringSecret{Spec: v1alpha1.StringSecretSpec{Data: map[string]string{"literal": "value"}, RotationInterval: "1h"}})
+	require.Error(t, err)
 }
 
 func TestJointDataAndChecksumTamperIsNotTrusted(t *testing.T) {

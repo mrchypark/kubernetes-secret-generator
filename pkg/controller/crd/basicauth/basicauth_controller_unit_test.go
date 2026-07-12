@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
@@ -61,6 +62,82 @@ func TestBasicAuthDriftRotatesCredentialSet(t *testing.T) {
 	require.False(t, bytes.Equal(oldPassword, after.Data[secret.FieldBasicAuthPassword]))
 	require.True(t, string(after.Data[secret.FieldBasicAuthUsername]) == "user")
 	require.NoError(t, secret.ValidateBasicAuthCredential(after.Data))
+}
+
+func TestBasicAuthRotationInterval(t *testing.T) {
+	viper.Set("secret-length", 24)
+	viper.Set("secret-encoding", "base64")
+	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.SchemeBuilder.AddToScheme(scheme))
+	instance := &v1alpha1.BasicAuth{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.SchemeGroupVersion.String(), Kind: Kind},
+		ObjectMeta: metav1.ObjectMeta{Name: "scheduled-auth", Namespace: "default", UID: "owner", Generation: 1},
+		Spec:       v1alpha1.BasicAuthSpec{Username: "user", Length: "24", Encoding: "base64", Data: map[string]string{"literal": "stable"}, RotationInterval: "1h"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(instance).WithObjects(instance).Build()
+	r := &ReconcileBasicAuth{client: cl, scheme: scheme, clock: func() time.Time { return now }}
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(instance)}
+	result, err := r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	created := &corev1.Secret{}
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	before := append([]byte(nil), created.Data[secret.FieldBasicAuthPassword]...)
+	require.Equal(t, now.Format(time.RFC3339Nano), created.Annotations[crd.AnnotationRotationAnchor])
+	require.Equal(t, "1", created.Annotations[crd.AnnotationLastRegenerated])
+
+	now = now.Add(30 * time.Minute)
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Minute, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	require.Equal(t, before, created.Data[secret.FieldBasicAuthPassword])
+
+	now = now.Add(30 * time.Minute)
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	require.NotEqual(t, before, created.Data[secret.FieldBasicAuthPassword])
+	require.Equal(t, "stable", string(created.Data["literal"]))
+	require.Equal(t, "1", created.Annotations[crd.AnnotationLastRegenerated])
+	after := append([]byte(nil), created.Data[secret.FieldBasicAuthPassword]...)
+	_, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	require.Equal(t, after, created.Data[secret.FieldBasicAuthPassword])
+
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, instance))
+	instance.Spec.RotationInterval = ""
+	instance.Generation++
+	require.NoError(t, cl.Update(context.Background(), instance))
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	require.NotContains(t, created.Annotations, crd.AnnotationRotationAnchor)
+	require.Equal(t, after, created.Data[secret.FieldBasicAuthPassword])
+
+	now = now.Add(10 * time.Minute)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, instance))
+	instance.Spec.RotationInterval = "1h"
+	instance.Generation++
+	require.NoError(t, cl.Update(context.Background(), instance))
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, created))
+	require.Equal(t, now.Format(time.RFC3339Nano), created.Annotations[crd.AnnotationRotationAnchor])
+	require.Equal(t, after, created.Data[secret.FieldBasicAuthPassword])
+}
+
+func TestBasicAuthRotationIntervalRuntimeValidation(t *testing.T) {
+	for _, interval := range []string{"invalid", "59s", "8761h"} {
+		_, err := basicPlanFor(&v1alpha1.BasicAuth{Spec: v1alpha1.BasicAuthSpec{RotationInterval: interval}})
+		require.Error(t, err, interval)
+	}
 }
 
 func TestBasicAuthSecretTypeMismatchIsTerminal(t *testing.T) {

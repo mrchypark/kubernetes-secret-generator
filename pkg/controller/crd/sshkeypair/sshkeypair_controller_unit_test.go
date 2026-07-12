@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
@@ -64,6 +65,43 @@ func TestPublicKeyDriftIsRepairedWithoutPrivateKeyRotation(t *testing.T) {
 	want, err := secret.SSHPublicKeyForPrivateKey(key)
 	require.NoError(t, err)
 	require.True(t, bytes.Equal(want, after.Data[secret.DefaultSecretFieldPublicKey]))
+}
+
+func TestSSHKeyPairRotationInterval(t *testing.T) {
+	now := time.Date(2026, 7, 12, 0, 0, 0, 0, time.UTC)
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.SchemeBuilder.AddToScheme(scheme))
+	instance := &v1alpha1.SSHKeyPair{
+		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.SchemeGroupVersion.String(), Kind: Kind},
+		ObjectMeta: metav1.ObjectMeta{Name: "scheduled-ssh", Namespace: "default", UID: "owner", Generation: 1},
+		Spec:       v1alpha1.SSHKeyPairSpec{Algorithm: "ed25519", Data: map[string]string{"literal": "stable"}, RotationInterval: "1h"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(instance).WithObjects(instance).Build()
+	r := &ReconcileSSHKeyPair{client: cl, scheme: scheme, clock: func() time.Time { return now }}
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(instance)}
+	result, err := r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	managed := &corev1.Secret{}
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, managed))
+	private := append([]byte(nil), managed.Data[secret.DefaultSecretFieldPrivateKey]...)
+
+	now = now.Add(time.Hour)
+	result, err = r.Reconcile(context.Background(), request)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, result.RequeueAfter)
+	require.NoError(t, cl.Get(context.Background(), request.NamespacedName, managed))
+	require.NotEqual(t, private, managed.Data[secret.DefaultSecretFieldPrivateKey])
+	require.Equal(t, "stable", string(managed.Data["literal"]))
+	require.Equal(t, "1", managed.Annotations[crd.AnnotationLastRegenerated])
+	_, err = secret.ValidateSSHPrivateKey(managed.Data[secret.DefaultSecretFieldPrivateKey], secret.SSHKeyAlgorithmED25519, 0)
+	require.NoError(t, err)
+}
+
+func TestSSHRotationIntervalRejectsSuppliedPrivateKey(t *testing.T) {
+	_, err := sshPlanFor(&v1alpha1.SSHKeyPair{Spec: v1alpha1.SSHKeyPairSpec{Algorithm: "ed25519", PrivateKey: "supplied", RotationInterval: "1h"}})
+	require.Error(t, err)
 }
 
 func TestOwnershipConflictIsTerminalAndDoesNotWriteSecret(t *testing.T) {

@@ -4,6 +4,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // BasicAuthSpec defines the desired state of BasicAuth
 // +kubebuilder:validation:XValidation:rule="!has(self.data) || !(['auth', 'username', 'password'].exists(k, k in self.data))",message="data must not contain reserved keys auth, username, or password"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (duration(self.rotationInterval) >= duration('1m') && duration(self.rotationInterval) <= duration('8760h'))",message="rotationInterval must be a Go duration between 1m and 8760h"
 type BasicAuthSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-6])[bB]?$`
@@ -23,6 +24,11 @@ type BasicAuthSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// RotationInterval periodically rotates the generated credential set. It
+	// uses Go duration syntax; an empty value disables periodic rotation.
+	// +optional
+	// +kubebuilder:validation:MaxLength=32
+	RotationInterval string `json:"rotationInterval,omitempty"`
 }
 
 // BasicAuthStatus defines the observed state of BasicAuth

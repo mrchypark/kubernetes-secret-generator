@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -33,13 +34,14 @@ const keyFingerprint = "key-set"
 
 func Add(mgr manager.Manager) error { return add(mgr, NewReconciler(mgr)) }
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileSSHKeyPair{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("sshkeypair-controller")} //nolint:staticcheck // Event recorder API migration is deferred to M2.
+	return &ReconcileSSHKeyPair{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("sshkeypair-controller"), clock: time.Now} //nolint:staticcheck // Event recorder API migration is deferred to M2.
 }
 
 type ReconcileSSHKeyPair struct {
 	client   client.Client
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
+	clock    func() time.Time
 }
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
@@ -95,9 +97,17 @@ type sshPlan struct {
 	fingerprint                                            string
 	typeName                                               corev1.SecretType
 	literalKeys, allKeys                                   []string
+	interval                                               time.Duration
 }
 
 func sshPlanFor(instance *v1alpha1.SSHKeyPair) (*sshPlan, error) {
+	interval, err := crd.ParseRotationInterval(instance.Spec.RotationInterval)
+	if err != nil {
+		return nil, err
+	}
+	if interval > 0 && instance.Spec.PrivateKey != "" {
+		return nil, fmt.Errorf("rotationInterval cannot be used with a supplied privateKey")
+	}
 	literal := make(map[string][]byte, len(instance.Spec.Data))
 	for key, value := range instance.Spec.Data {
 		literal[key] = []byte(value)
@@ -125,7 +135,7 @@ func sshPlanFor(instance *v1alpha1.SSHKeyPair) (*sshPlan, error) {
 		}
 	}
 	typeName := crd.EffectiveSecretType(instance.Spec.Type)
-	p := &sshPlan{algorithm: algorithm, length: length, expectedLength: expected, privateField: privateField, publicField: publicField, supplied: instance.Spec.PrivateKey, typeName: typeName, literalKeys: crd.StringMapKeys(instance.Spec.Data)}
+	p := &sshPlan{algorithm: algorithm, length: length, expectedLength: expected, privateField: privateField, publicField: publicField, supplied: instance.Spec.PrivateKey, typeName: typeName, literalKeys: crd.StringMapKeys(instance.Spec.Data), interval: interval}
 	p.allKeys = append(append([]string(nil), p.literalKeys...), privateField, publicField)
 	p.fingerprint = crd.Fingerprint([]byte(algorithm), []byte(strconv.Itoa(expected)), []byte(privateField), []byte(publicField), []byte(instance.Spec.PrivateKey))
 	return p, nil
@@ -142,6 +152,9 @@ func (r *ReconcileSSHKeyPair) create(ctx context.Context, instance *v1alpha1.SSH
 		target.Data[p.privateField] = []byte(p.supplied)
 	}
 	crd.SetRegenerationMarker(target, instance.Generation)
+	if p.interval > 0 {
+		crd.SetRotationAnchor(target, r.now())
+	}
 	t := p.tracking(instance)
 	crd.ReserveChecksums(t)
 	crd.StoreTracking(target, t)
@@ -169,7 +182,7 @@ func (r *ReconcileSSHKeyPair) create(ctx context.Context, instance *v1alpha1.SSH
 		controllerobservability.ObserveDomainOutcome(controllerobservability.ControllerSSHKeyPair, "create", "success", v1alpha1.ReasonReconciled)
 	}
 	logger.Info("created managed Secret")
-	return crd.ReadyStatus(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation))
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation), p.interval)
 }
 
 func (r *ReconcileSSHKeyPair) update(ctx context.Context, instance *v1alpha1.SSHKeyPair, existing *corev1.Secret, p *sshPlan, logger logr.Logger) (reconcile.Result, error) {
@@ -178,15 +191,34 @@ func (r *ReconcileSSHKeyPair) update(ctx context.Context, instance *v1alpha1.SSH
 	}
 	t, state, trackingErr := crd.LoadTracking(existing)
 	suspiciousTracking := controllerobservability.HasSuspiciousCandidate(ctx, "secret_drift")
+	now := r.now()
+	due, requeueAfter, anchored, scheduleErr := crd.RotationSchedule(existing, p.interval, now)
+	if scheduleErr != nil {
+		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, scheduleErr.Error(), instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
+	}
 	if crd.IsImmutable(existing) {
-		if suspiciousTracking || state != crd.TrackingValid || !p.immutableCurrent(instance, existing, t) {
+		if suspiciousTracking || state != crd.TrackingValid || due || !p.immutableCurrent(instance, existing, t) {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonImmutableSecretConflict, "immutable Secret requires reconciliation", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
 		}
 		marker, err := crd.ParseRegenerationMarker(existing, instance.Generation)
 		if err != nil {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonRegenerationStateConflict, err.Error(), instance.Status.TrackingInitialized, -1)
 		}
-		return crd.ReadyStatus(ctx, r.client, instance, existing, marker)
+		if p.interval > 0 && !anchored || p.interval == 0 && existing.Annotations[crd.AnnotationRotationAnchor] != "" {
+			target := existing.DeepCopy()
+			if p.interval > 0 {
+				crd.SetRotationAnchor(target, now)
+				requeueAfter = p.interval
+			} else {
+				crd.ClearRotationAnchor(target)
+			}
+			cc := crd.Client{Client: r.client}
+			if _, err = cc.PatchSecret(ctx, existing, target); err != nil {
+				return crd.ApplyFailure(ctx, r.client, instance, existing, err)
+			}
+			return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+		}
+		return crd.ReadyStatusAfter(ctx, r.client, instance, existing, marker, requeueAfter)
 	}
 	if suspiciousTracking {
 		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, "data and controller tracking changed outside an observed controller write", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
@@ -230,7 +262,7 @@ func (r *ReconcileSSHKeyPair) update(ctx context.Context, instance *v1alpha1.SSH
 	fingerprintChanged := t.Fingerprints[keyFingerprint] != p.fingerprint
 	privateDrift := t.Checksums[p.privateField] != crd.DataChecksum(p.privateField, existing.Data[p.privateField])
 	publicDrift := t.Checksums[p.publicField] != crd.DataChecksum(p.publicField, existing.Data[p.publicField])
-	rotatePair := force || fingerprintChanged || privateDrift
+	rotatePair := due || force || fingerprintChanged || privateDrift
 	if p.supplied != "" && rotatePair {
 		target.Data[p.privateField] = []byte(p.supplied)
 		rotatePair = false
@@ -244,6 +276,15 @@ func (r *ReconcileSSHKeyPair) update(ctx context.Context, instance *v1alpha1.SSH
 	if force {
 		crd.SetRegenerationMarker(target, instance.Generation)
 		marker = instance.Generation
+	}
+	if p.interval > 0 {
+		if !anchored || rotatePair || publicDrift {
+			crd.SetRotationAnchor(target, now)
+			requeueAfter = p.interval
+		}
+	} else {
+		crd.ClearRotationAnchor(target)
+		requeueAfter = 0
 	}
 	crd.ReserveChecksums(next)
 	crd.StoreTracking(target, next)
@@ -275,7 +316,14 @@ func (r *ReconcileSSHKeyPair) update(ctx context.Context, instance *v1alpha1.SSH
 			controllerobservability.RecordRegenerated(ctx, instance)
 		}
 	}
-	return crd.ReadyStatus(ctx, r.client, instance, target, marker)
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+}
+
+func (r *ReconcileSSHKeyPair) now() time.Time {
+	if r.clock == nil {
+		return time.Now()
+	}
+	return r.clock()
 }
 
 func (p *sshPlan) tracking(instance *v1alpha1.SSHKeyPair) *crd.Tracking {

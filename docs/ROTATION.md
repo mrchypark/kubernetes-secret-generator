@@ -1,6 +1,23 @@
 # Credential rotation runbook
 
-Any generated-value drift, owned Secret deletion, approved regeneration, or approved legacy reapply creates new credential material. The controller updates Kubernetes Secret state; it does not reload applications or restore a prior random value.
+Any generated-value drift, owned Secret deletion, approved regeneration, scheduled rotation, or approved legacy reapply creates new credential material. The controller updates Kubernetes Secret state; it does not reload applications or restore a prior random value.
+
+## Scheduled rotation
+
+`StringSecret`, `BasicAuth`, and `SSHKeyPair` can rotate generated credentials after an elapsed interval:
+
+```yaml
+spec:
+  rotationInterval: 24h
+```
+
+The value uses Go duration syntax and must be from `1m` through `8760h`, inclusive. Empty or omitted disables scheduled rotation. It is an elapsed interval, not a cron schedule, and is unavailable for annotation-managed Secrets.
+
+Enabling it on an existing CR starts the interval without rotating immediately. Disabling and later re-enabling starts a fresh interval. Changing an enabled interval retains the current schedule anchor: shortening it may make one rotation immediately due, while lengthening it postpones the next rotation. If downtime spans several intervals, reconciliation performs one rotation, not one per missed interval.
+
+Each successful generated credential replacement restarts the interval. This includes scheduled or forced rotation, generated-value drift repair, and a generation-setting change that replaces credentials. A literal or label-only update does not restart it. Secret and schedule tracking are committed together, so a controller restart or status retry does not cause an extra rotation.
+
+Scheduled rotation is invalid for a `StringSecret` with no generated `spec.fields`, or for an `SSHKeyPair` with a supplied `spec.privateKey`. When an immutable Secret becomes due, the controller reports `ImmutableSecretConflict` and leaves its data unchanged.
 
 ## Before rotation
 
@@ -9,7 +26,7 @@ Any generated-value drift, owned Secret deletion, approved regeneration, or appr
 3. Verify an encrypted backup and restore rehearsal exists when rollback to the prior credential is required.
 4. Choose the smallest rotation: one String field, one CR generation, or one object. Never rotate every namespace with `--all` in an ordinary change.
 
-## Trigger
+## Manual trigger
 
 For a CR, patch `forceRegenerate` in a new generation. `true` rotates once for that generation; a retry or controller restart does not rotate again.
 

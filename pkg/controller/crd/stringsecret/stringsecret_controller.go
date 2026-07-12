@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -31,13 +32,14 @@ const Kind = "StringSecret"
 
 func Add(mgr manager.Manager) error { return add(mgr, NewReconciler(mgr)) }
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileStringSecret{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("stringsecret-controller")} //nolint:staticcheck // Event recorder API migration is deferred to M2.
+	return &ReconcileStringSecret{client: mgr.GetClient(), scheme: mgr.GetScheme(), recorder: mgr.GetEventRecorderFor("stringsecret-controller"), clock: time.Now} //nolint:staticcheck // Event recorder API migration is deferred to M2.
 }
 
 type ReconcileStringSecret struct {
 	client   client.Client
 	scheme   *runtime.Scheme
 	recorder record.EventRecorder
+	clock    func() time.Time
 }
 
 func add(mgr manager.Manager, r reconcile.Reconciler) error {
@@ -100,9 +102,17 @@ type stringPlan struct {
 	dataKeys []string
 	allKeys  []string
 	typeName corev1.SecretType
+	interval time.Duration
 }
 
 func stringPlanFor(instance *v1alpha1.StringSecret) (*stringPlan, error) {
+	interval, err := crd.ParseRotationInterval(instance.Spec.RotationInterval)
+	if err != nil {
+		return nil, err
+	}
+	if interval > 0 && len(instance.Spec.Fields) == 0 {
+		return nil, fmt.Errorf("rotationInterval requires at least one generated field")
+	}
 	literal := make(map[string][]byte, len(instance.Spec.Data))
 	for key, value := range instance.Spec.Data {
 		literal[key] = []byte(value)
@@ -114,7 +124,7 @@ func stringPlanFor(instance *v1alpha1.StringSecret) (*stringPlan, error) {
 	if err := secret.ValidateManagedFields(names, literal); err != nil {
 		return nil, err
 	}
-	p := &stringPlan{dataKeys: crd.StringMapKeys(instance.Spec.Data), typeName: crd.EffectiveSecretType(instance.Spec.Type)}
+	p := &stringPlan{dataKeys: crd.StringMapKeys(instance.Spec.Data), typeName: crd.EffectiveSecretType(instance.Spec.Type), interval: interval}
 	for _, field := range instance.Spec.Fields {
 		length, byteLength, err := secret.ParseByteLength(secret.DefaultLength(), field.Length)
 		if err != nil {
@@ -147,6 +157,9 @@ func (r *ReconcileStringSecret) create(ctx context.Context, instance *v1alpha1.S
 	tracking := plan.tracking(instance)
 	crd.ApplyManagedData(target, instance.Spec.Data, plan.allKeys, nil)
 	crd.SetRegenerationMarker(target, instance.Generation)
+	if plan.interval > 0 {
+		crd.SetRotationAnchor(target, r.now())
+	}
 	crd.ReserveChecksums(tracking)
 	crd.StoreTracking(target, tracking)
 	projected := make(map[string]int, len(plan.fields))
@@ -176,7 +189,7 @@ func (r *ReconcileStringSecret) create(ctx context.Context, instance *v1alpha1.S
 		controllerobservability.ObserveDomainOutcome(controllerobservability.ControllerStringSecret, "create", "success", v1alpha1.ReasonReconciled)
 	}
 	logger.Info("created managed Secret")
-	return crd.ReadyStatus(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation))
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, markerOrUnset(target, instance.Generation), plan.interval)
 }
 
 func (r *ReconcileStringSecret) update(ctx context.Context, instance *v1alpha1.StringSecret, existing *corev1.Secret, plan *stringPlan, logger logr.Logger) (reconcile.Result, error) {
@@ -185,15 +198,34 @@ func (r *ReconcileStringSecret) update(ctx context.Context, instance *v1alpha1.S
 	}
 	tracking, state, trackingErr := crd.LoadTracking(existing)
 	suspiciousTracking := controllerobservability.HasSuspiciousCandidate(ctx, "secret_drift")
+	now := r.now()
+	due, requeueAfter, anchored, scheduleErr := crd.RotationSchedule(existing, plan.interval, now)
+	if scheduleErr != nil {
+		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, scheduleErr.Error(), instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
+	}
 	if crd.IsImmutable(existing) {
-		if suspiciousTracking || state != crd.TrackingValid || !plan.immutableCurrent(instance, existing, tracking) {
+		if suspiciousTracking || state != crd.TrackingValid || due || !plan.immutableCurrent(instance, existing, tracking) {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonImmutableSecretConflict, "immutable Secret requires reconciliation", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
 		}
 		marker, err := crd.ParseRegenerationMarker(existing, instance.Generation)
 		if err != nil {
 			return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonRegenerationStateConflict, err.Error(), instance.Status.TrackingInitialized, -1)
 		}
-		return crd.ReadyStatus(ctx, r.client, instance, existing, marker)
+		if plan.interval > 0 && !anchored || plan.interval == 0 && existing.Annotations[crd.AnnotationRotationAnchor] != "" {
+			target := existing.DeepCopy()
+			if plan.interval > 0 {
+				crd.SetRotationAnchor(target, now)
+				requeueAfter = plan.interval
+			} else {
+				crd.ClearRotationAnchor(target)
+			}
+			cc := crd.Client{Client: r.client}
+			if _, err = cc.PatchSecret(ctx, existing, target); err != nil {
+				return crd.ApplyFailure(ctx, r.client, instance, existing, err)
+			}
+			return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+		}
+		return crd.ReadyStatusAfter(ctx, r.client, instance, existing, marker, requeueAfter)
 	}
 	if suspiciousTracking {
 		return crd.TerminalStatus(ctx, r.client, instance, existing, v1alpha1.ReasonTrackingStateConflict, "data and controller tracking changed outside an observed controller write", instance.Status.TrackingInitialized, markerOrUnset(existing, instance.Generation))
@@ -245,7 +277,7 @@ func (r *ReconcileStringSecret) update(ctx context.Context, instance *v1alpha1.S
 		oldFingerprint := tracking.Fingerprints[field.name]
 		checksum, checksumOK := tracking.Checksums[field.name]
 		drift := !checksumOK || checksum != crd.DataChecksum(field.name, existing.Data[field.name])
-		rotate[field.name] = force || state == crd.TrackingAbsent && force || oldFingerprint != field.fingerprint || drift
+		rotate[field.name] = due || force || state == crd.TrackingAbsent && force || oldFingerprint != field.fingerprint || drift
 		if rotate[field.name] {
 			projected[field.name] = field.valueLength
 		}
@@ -254,6 +286,19 @@ func (r *ReconcileStringSecret) update(ctx context.Context, instance *v1alpha1.S
 	if force {
 		crd.SetRegenerationMarker(target, instance.Generation)
 		marker = instance.Generation
+	}
+	rotated := false
+	for _, value := range rotate {
+		rotated = rotated || value
+	}
+	if plan.interval > 0 {
+		if !anchored || rotated {
+			crd.SetRotationAnchor(target, now)
+			requeueAfter = plan.interval
+		}
+	} else {
+		crd.ClearRotationAnchor(target)
+		requeueAfter = 0
 	}
 	crd.ReserveChecksums(next)
 	crd.StoreTracking(target, next)
@@ -288,7 +333,14 @@ func (r *ReconcileStringSecret) update(ctx context.Context, instance *v1alpha1.S
 			}
 		}
 	}
-	return crd.ReadyStatus(ctx, r.client, instance, target, marker)
+	return crd.ReadyStatusAfter(ctx, r.client, instance, target, marker, requeueAfter)
+}
+
+func (r *ReconcileStringSecret) now() time.Time {
+	if r.clock == nil {
+		return time.Now()
+	}
+	return r.clock()
 }
 
 func (p *stringPlan) tracking(instance *v1alpha1.StringSecret) *crd.Tracking {

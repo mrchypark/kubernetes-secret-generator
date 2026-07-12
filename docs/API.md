@@ -8,6 +8,7 @@ The CR API is `secretgenerator.mittwald.de/v1alpha1`; all CRs are namespaced and
 |---|---|---|---|
 | All | `spec.data` | empty | Declarative literal Secret data; keys are 1–253 characters matching `[A-Za-z0-9._-]+` |
 | All | `spec.forceRegenerate` | `false` | When true, rotate generated fields once for that CR generation |
+| All CRs | `spec.rotationInterval` | empty (disabled) | Go duration from `1m` through `8760h`; rotates generated credentials after each elapsed interval |
 | `StringSecret` | `spec.type` | `Opaque` | Declarative Kubernetes Secret type |
 | `StringSecret` | `spec.fields[]` | none | 1–64 generated fields; each needs a unique `fieldName` and must not collide with `spec.data` |
 | `StringSecret` | `spec.fields[].encoding` | controller default (`base64`) | `base64`, `base64url`, `base32`, `hex`, or `raw` |
@@ -23,6 +24,10 @@ The CR API is `secretgenerator.mittwald.de/v1alpha1`; all CRs are namespaced and
 | `SSHKeyPair` | `spec.type` | `Opaque` | Declarative Kubernetes Secret type |
 
 A resource may manage at most 256 keys and its projected serialized Secret may not exceed 768 KiB. Invalid desired state is terminal: the controller sets `Ready=False` and does not periodically retry until the object changes.
+
+`spec.rotationInterval` applies only to the three CR kinds, not annotation-managed Secrets. Empty or omitted means no scheduled rotation. A non-empty value uses Go duration syntax and must be between `1m` and `8760h`, inclusive. `StringSecret` requires at least one generated `spec.fields` entry, and `SSHKeyPair` cannot combine scheduled rotation with a supplied `spec.privateKey`.
+
+Enabling scheduled rotation establishes a new interval without immediately changing the Secret. Disabling and later re-enabling also starts a fresh interval. Changing an enabled interval keeps the current schedule anchor, so shortening it can make one rotation immediately due while lengthening it postpones the next rotation. If the controller misses multiple intervals, it rotates once and starts the next interval from that successful write. A successful force regeneration, generated-value drift repair, or other generated credential replacement also restarts the interval. Literal-only reconciliation does not. An immutable Secret that reaches its rotation time reports `ImmutableSecretConflict` instead of changing data. See [Credential rotation](ROTATION.md).
 
 ## Secret annotations
 

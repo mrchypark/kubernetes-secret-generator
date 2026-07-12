@@ -7,6 +7,8 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="(has(self.privateKeyField) ? self.privateKeyField : 'ssh-privatekey') != (has(self.publicKeyField) ? self.publicKeyField : 'ssh-publickey')",message="privateKeyField and publicKeyField must differ"
 // +kubebuilder:validation:XValidation:rule="!has(self.data) || !((has(self.privateKeyField) ? self.privateKeyField : 'ssh-privatekey') in self.data) && !((has(self.publicKeyField) ? self.publicKeyField : 'ssh-publickey') in self.data)",message="key fields must not collide with data keys"
 // +kubebuilder:validation:XValidation:rule="(has(oldSelf.type) && oldSelf.type.size() > 0 ? oldSelf.type : 'Opaque') == (has(self.type) && self.type.size() > 0 ? self.type : 'Opaque')",message="type is immutable after creation; omitted, empty, and Opaque are equivalent"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (duration(self.rotationInterval) >= duration('1m') && duration(self.rotationInterval) <= duration('8760h'))",message="rotationInterval must be a Go duration between 1m and 8760h"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || !has(self.privateKey) || self.privateKey.size() == 0",message="rotationInterval cannot be used with a supplied privateKey"
 type SSHKeyPairSpec struct {
 	// +optional
 	// +kubebuilder:default=rsa
@@ -35,6 +37,11 @@ type SSHKeyPairSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// RotationInterval periodically rotates a generated key pair. It uses Go
+	// duration syntax; an empty value disables periodic rotation.
+	// +optional
+	// +kubebuilder:validation:MaxLength=32
+	RotationInterval string `json:"rotationInterval,omitempty"`
 }
 
 // SSHKeyPairStatus defines the observed state of SSHKeyPair

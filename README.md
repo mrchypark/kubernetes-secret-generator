@@ -25,9 +25,9 @@ make install
 
 | Mode | Kind/type | Main inputs | Generated data |
 |---|---|---|---|
-| CR | `StringSecret` | `spec.fields`, `spec.data`, `spec.type`, `spec.forceRegenerate` | configured random fields |
-| CR | `BasicAuth` | `spec.username`, `spec.length`, `spec.encoding`, `spec.data`, `spec.forceRegenerate` | `username`, `password`, `auth` |
-| CR | `SSHKeyPair` | `spec.algorithm`, `spec.length`, `spec.privateKey`, field names, `spec.data`, `spec.forceRegenerate` | private/public key fields |
+| CR | `StringSecret` | `spec.fields`, `spec.data`, `spec.type`, regeneration settings | configured random fields |
+| CR | `BasicAuth` | `spec.username`, `spec.length`, `spec.encoding`, `spec.data`, regeneration settings | `username`, `password`, `auth` |
+| CR | `SSHKeyPair` | `spec.algorithm`, `spec.length`, `spec.privateKey`, field names, regeneration settings | private/public key fields |
 | Annotation | `type=string` | `autogenerate`, `length`, `encoding` | named random fields |
 | Annotation | `type=basic-auth` | `basic-auth-username`, `length`, `encoding` | `username`, `password`, `auth` |
 | Annotation | `type=ssh-keypair` | `ssh-key-algorithm`, `length` | `ssh-privatekey`, `ssh-publickey` |
@@ -53,6 +53,8 @@ CR literal data, type, CR-managed labels, and generated field configuration are 
 Self-heal after generated credential drift causes safe rotation, not recovery of the previous value. Consumers must reload or restart after a rotation or recreation.
 
 For CRs, `spec.forceRegenerate: true` rotates generated fields once per CR generation. Reconciliation, controller restart, or a status-write retry in the same generation does not rotate again. To rotate again, apply `false` and then `true`, or apply another spec change while it remains true.
+
+CRs can also set `spec.rotationInterval` to a Go duration from `1m` through `8760h`, for example `24h`. Empty or omitted disables scheduled rotation. Enabling it starts a new interval without rotating immediately; missed intervals cause one safe rotation rather than catch-up rotations. This field is not supported on annotation-managed Secrets. See [credential rotation](docs/ROTATION.md) for the complete behavior and constraints.
 
 For annotation-managed Secrets:
 

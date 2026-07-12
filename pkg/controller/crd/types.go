@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,13 +39,17 @@ const (
 	AnnotationGenerationFingerprint = "secretgenerator.mittwald.de/generation-spec-fingerprints"
 	AnnotationManagedKeysDigest     = "secretgenerator.mittwald.de/managed-keys-digest"
 	AnnotationLastRegenerated       = "secretgenerator.mittwald.de/last-regenerated-generation"
+	AnnotationRotationAnchor        = "secretgenerator.mittwald.de/rotation-anchor"
 	TrackingVersion                 = "v1"
+	MinimumRotationInterval         = time.Minute
+	MaximumRotationInterval         = 8760 * time.Hour
 )
 
 var trackingAnnotations = []string{
 	AnnotationTrackingVersion, AnnotationManagedDataKeys, AnnotationManagedLabelKeys,
 	AnnotationManagedDataChecksums, AnnotationGenerationFingerprint, AnnotationManagedKeysDigest,
 	AnnotationLastRegenerated,
+	AnnotationRotationAnchor,
 }
 
 type TrackingState int
@@ -344,6 +349,54 @@ func SetRegenerationMarker(secret *corev1.Secret, generation int64) {
 	secret.Annotations[AnnotationLastRegenerated] = strconv.FormatInt(generation, 10)
 }
 
+// ParseRotationInterval validates the bounded Go duration accepted by CRDs.
+// Zero means that periodic rotation is disabled.
+func ParseRotationInterval(value string) (time.Duration, error) {
+	if value == "" {
+		return 0, nil
+	}
+	interval, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("rotationInterval must be a valid Go duration: %w", err)
+	}
+	if interval < MinimumRotationInterval || interval > MaximumRotationInterval {
+		return 0, fmt.Errorf("rotationInterval must be between %s and %s", MinimumRotationInterval, MaximumRotationInterval)
+	}
+	return interval, nil
+}
+
+// RotationSchedule returns whether an interval is due, the exact delay until
+// its next deadline, and whether the Secret already has a durable anchor.
+func RotationSchedule(secret *corev1.Secret, interval time.Duration, now time.Time) (due bool, after time.Duration, anchored bool, err error) {
+	if interval == 0 {
+		return false, 0, false, nil
+	}
+	value, ok := secret.Annotations[AnnotationRotationAnchor]
+	if !ok {
+		return false, interval, false, nil
+	}
+	anchor, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return false, 0, true, fmt.Errorf("rotation anchor is invalid: %w", err)
+	}
+	remaining := interval - now.Sub(anchor)
+	if remaining <= 0 {
+		return true, 0, true, nil
+	}
+	return false, remaining, true, nil
+}
+
+func SetRotationAnchor(secret *corev1.Secret, now time.Time) {
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[AnnotationRotationAnchor] = now.UTC().Format(time.RFC3339Nano)
+}
+
+func ClearRotationAnchor(secret *corev1.Secret) {
+	delete(secret.Annotations, AnnotationRotationAnchor)
+}
+
 func ApplyManagedData(target *corev1.Secret, literals map[string]string, desiredKeys, previousKeys []string) {
 	if target.Data == nil {
 		target.Data = map[string][]byte{}
@@ -450,7 +503,7 @@ func (c *Client) PatchSecret(ctx context.Context, existing, desired *corev1.Secr
 		return false, nil
 	}
 	controllerobservability.ConfirmEligibleEvent(ctx, "secret_drift")
-	if err := c.Patch(ctx, desired, client.MergeFrom(existing)); err != nil {
+	if err := c.Patch(ctx, desired, client.MergeFromWithOptions(existing, client.MergeFromWithOptimisticLock{})); err != nil {
 		return true, err
 	}
 	controllerobservability.RecordControllerWrite(ctx, desired)
@@ -496,11 +549,15 @@ func TerminalStatus(ctx context.Context, c client.Client, instance v1alpha1.APIO
 }
 
 func ReadyStatus(ctx context.Context, c client.Client, instance v1alpha1.APIObject, secret *corev1.Secret, last int64) (reconcile.Result, error) {
+	return ReadyStatusAfter(ctx, c, instance, secret, last, 0)
+}
+
+func ReadyStatusAfter(ctx context.Context, c client.Client, instance v1alpha1.APIObject, secret *corev1.Secret, last int64, after time.Duration) (reconcile.Result, error) {
 	cc := Client{Client: c}
 	if err := cc.SetStatus(ctx, instance, secret, metav1.ConditionTrue, v1alpha1.ReasonReconciled, "Secret is reconciled", true, last); err != nil {
 		return reconcile.Result{}, err
 	}
-	return reconcile.Result{}, nil
+	return reconcile.Result{RequeueAfter: after}, nil
 }
 
 func ApplyFailure(ctx context.Context, c client.Client, instance v1alpha1.APIObject, secret *corev1.Secret, applyErr error) (reconcile.Result, error) {

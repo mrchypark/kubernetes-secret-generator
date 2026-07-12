@@ -544,8 +544,15 @@ func TestCRDAdmissionAndExamples(t *testing.T) {
 
 	invalid := []client.Object{
 		&v1alpha1.StringSecret{ObjectMeta: metav1.ObjectMeta{Name: "invalid-length", Namespace: ns}, Spec: v1alpha1.StringSecretSpec{Fields: []v1alpha1.Field{{FieldName: "value", Length: "0"}}}},
+		&v1alpha1.StringSecret{ObjectMeta: metav1.ObjectMeta{Name: "invalid-string-interval", Namespace: ns}, Spec: v1alpha1.StringSecretSpec{Fields: []v1alpha1.Field{{FieldName: "value"}}, RotationInterval: "not-a-duration"}},
+		&v1alpha1.StringSecret{ObjectMeta: metav1.ObjectMeta{Name: "invalid-literal-only-interval", Namespace: ns}, Spec: v1alpha1.StringSecretSpec{Data: map[string]string{"literal": "value"}, RotationInterval: "1h"}},
 		&v1alpha1.BasicAuth{ObjectMeta: metav1.ObjectMeta{Name: "invalid-username", Namespace: ns}, Spec: v1alpha1.BasicAuthSpec{Username: "bad:name"}},
+		&v1alpha1.BasicAuth{ObjectMeta: metav1.ObjectMeta{Name: "invalid-short-interval", Namespace: ns}, Spec: v1alpha1.BasicAuthSpec{RotationInterval: "59s"}},
+		&v1alpha1.BasicAuth{ObjectMeta: metav1.ObjectMeta{Name: "invalid-zero-interval", Namespace: ns}, Spec: v1alpha1.BasicAuthSpec{RotationInterval: "0s"}},
+		&v1alpha1.BasicAuth{ObjectMeta: metav1.ObjectMeta{Name: "invalid-negative-interval", Namespace: ns}, Spec: v1alpha1.BasicAuthSpec{RotationInterval: "-1m"}},
 		&v1alpha1.SSHKeyPair{ObjectMeta: metav1.ObjectMeta{Name: "invalid-algorithm", Namespace: ns}, Spec: v1alpha1.SSHKeyPairSpec{Algorithm: "dsa"}},
+		&v1alpha1.SSHKeyPair{ObjectMeta: metav1.ObjectMeta{Name: "invalid-long-interval", Namespace: ns}, Spec: v1alpha1.SSHKeyPairSpec{Algorithm: "ed25519", RotationInterval: "8761h"}},
+		&v1alpha1.SSHKeyPair{ObjectMeta: metav1.ObjectMeta{Name: "invalid-supplied-key-interval", Namespace: ns}, Spec: v1alpha1.SSHKeyPairSpec{Algorithm: "ed25519", PrivateKey: "supplied", RotationInterval: "1h"}},
 	}
 	for _, object := range invalid {
 		if err := testClient.Create(context.Background(), object); err == nil || !apierrors.IsInvalid(err) {
