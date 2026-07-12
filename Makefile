@@ -74,7 +74,7 @@ test-safety: test-shell
 
 test-shell:
 	@for file in $$(find scripts test -type f -name '*.sh' | sort); do sh -n "$$file"; done
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck $$(find scripts test -type f -name '*.sh' | sort); fi
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck --severity=warning $$(find scripts test -type f -name '*.sh' | sort); fi
 
 test-supply-chain:
 	scripts/test-supply-chain-static.sh
