@@ -1,0 +1,15 @@
+helm.version=v3.21.3
+helm.linux-amd64.sha256=15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0
+helm.linux-arm64.sha256=67f58155079ff9ffab98ba5c88daff0ed9b542f3a4732f5dd426dde7dd0f5244
+helm.darwin-amd64.sha256=76d0db4730b05d3d625eee11e80f0721b32b4d8422f4e5d093de6337bf3ac9f8
+helm.darwin-arm64.sha256=19879a848cad832b7a1ac24b767a481d20fb3b95ab53a220849649422ada144e
+controller-gen.version=v0.21.0
+controller-gen.module-sum=h1:KXDQza3bgjlPY6xLR63tI/40gzjhyUAvkCrwzd2/6cs=
+controller-gen.module-zip.sha256=2d4438e9437cf70d60625a19673d63cbfb001b707e4baf602e50734964c97fd7
+crd.v3.4.1.basicauths.spec-sha256=6d90f44c610fe07c51aa729946c8368296d1bfe8bea2bb098cbd85c3a36c59f5
+crd.v3.4.1.sshkeypairs.spec-sha256=2a366ddc189823995403b2fb1b278387a108478686adfde7096586a276b42ddf
+crd.v3.4.1.stringsecrets.spec-sha256=569acb9a3ff0dac64254fc72dd276b3ae29c7947da92c08120e18ccba8827871
+image.v3.4.1.linux-amd64=ghcr.io/mrchypark/kubernetes-secret-generator:v3.4.1@sha256:be0b248155922366cdfae7282b3f0c9d53291bf47a4309fdff3c6fcd80f17880
+kind.version=v0.31.0
+kind.node.v1.35.0=kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+kind.node.v1.34.3=kindest/node:v1.34.3@sha256:08497ee19eace7b4b5348db5c6a1591d7752b164530a36f855cb0f2bdcbadd48

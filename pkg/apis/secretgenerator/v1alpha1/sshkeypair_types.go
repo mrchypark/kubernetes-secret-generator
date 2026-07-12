@@ -1,40 +1,52 @@
 package v1alpha1
 
-import (
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-)
-
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // SSHKeyPairSpec defines the desired state of SSHKeyPair
+// +kubebuilder:validation:XValidation:rule="self.algorithm == 'ed25519' || !has(self.length) || (self.algorithm == 'rsa' && self.length in ['2048', '3072', '4096']) || (self.algorithm == 'ecdsa' && self.length in ['256', '384', '521'])",message="length must match the selected algorithm"
+// +kubebuilder:validation:XValidation:rule="(has(self.privateKeyField) ? self.privateKeyField : 'ssh-privatekey') != (has(self.publicKeyField) ? self.publicKeyField : 'ssh-publickey')",message="privateKeyField and publicKeyField must differ"
+// +kubebuilder:validation:XValidation:rule="!has(self.data) || !((has(self.privateKeyField) ? self.privateKeyField : 'ssh-privatekey') in self.data) && !((has(self.publicKeyField) ? self.publicKeyField : 'ssh-publickey') in self.data)",message="key fields must not collide with data keys"
+// +kubebuilder:validation:XValidation:rule="(has(oldSelf.type) && oldSelf.type.size() > 0 ? oldSelf.type : 'Opaque') == (has(self.type) && self.type.size() > 0 ? self.type : 'Opaque')",message="type is immutable after creation; omitted, empty, and Opaque are equivalent"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (duration(self.rotationInterval) >= duration('1m') && duration(self.rotationInterval) <= duration('8760h'))",message="rotationInterval must be a Go duration between 1m and 8760h"
+// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || !has(self.privateKey) || self.privateKey.size() == 0",message="rotationInterval cannot be used with a supplied privateKey"
 type SSHKeyPairSpec struct {
 	// +optional
+	// +kubebuilder:default=rsa
 	// +kubebuilder:validation:Enum=rsa;ecdsa;ed25519
 	Algorithm string `json:"algorithm,omitempty"`
 	// +optional
 	Length string `json:"length,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MaxLength=65536
 	PrivateKey string `json:"privateKey,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9._-]+$`
 	PrivateKeyField string `json:"privateKeyField,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9._-]+$`
 	PublicKeyField string `json:"publicKeyField,omitempty"`
 	// +optional
 	Type string `json:"type,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MaxProperties=254
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.size() <= 253 && k.matches('^[A-Za-z0-9._-]+$'))",message="data keys must be 1..253 characters and contain only letters, digits, dot, underscore, or hyphen"
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// RotationInterval periodically rotates a generated key pair. It uses Go
+	// duration syntax; an empty value disables periodic rotation.
+	// +optional
+	// +kubebuilder:validation:MaxLength=32
+	RotationInterval string `json:"rotationInterval,omitempty"`
 }
 
 // SSHKeyPairStatus defines the observed state of SSHKeyPair
 type SSHKeyPairStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
-	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-	Secret *v1.ObjectReference `json:"secret,omitempty"`
+	CommonSecretStatus `json:",inline"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -42,6 +54,7 @@ type SSHKeyPairStatus struct {
 // SSHKeyPair is the Schema for the sshkeypairs API
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=sshkeypairs,scope=Namespaced
+// +kubebuilder:metadata:annotations="secretgenerator.mittwald.de/schema-release=v4.0.0"
 type SSHKeyPair struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -95,12 +108,4 @@ func (in *SSHKeyPair) GetStatus() SecretStatus {
 
 func (in *SSHKeyPair) GetType() string {
 	return in.Spec.Type
-}
-
-func (in *SSHKeyPairStatus) GetSecret() *v1.ObjectReference {
-	return in.Secret
-}
-
-func (in *SSHKeyPairStatus) SetSecret(secret *v1.ObjectReference) {
-	in.Secret = secret
 }

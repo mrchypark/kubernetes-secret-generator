@@ -1,0 +1,14 @@
+profile: production
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+scope:
+  mode: ownNamespace
+crdLifecycle:
+  manager: direct
+crdControllers:
+  enabled: true
+metrics:
+  service:
+    enabled: true
+  serviceMonitor:
+    enabled: false

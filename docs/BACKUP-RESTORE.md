@@ -1,0 +1,87 @@
+# Encrypted backup and restore
+
+The wrapper always requires an absolute `KUBECONFIG`, exact context, API server,
+embedded-CA fingerprint, explicit scope, and a GitHub release issue reference. It supports
+single-namespace, selected-namespace, and cluster-scope backup/restore without a separate
+repository-defined approval record.
+
+Secret data, CR `spec.data`/`spec.privateKey`, and controller tracking are sensitive. Store only an encrypted, access-controlled payload. Never upload plaintext YAML, Secret values, private keys, or managed checksums to CI, Git, tickets, logs, or incident reports.
+
+## Backup contents
+
+Back up CRDs; CR metadata/spec; and managed Secret data, type, labels, annotations, immutable bit, owner classification, and tracking annotations. Do not rely on Kubernetes UID, status, resourceVersion, managedFields, or timestamps as restorable identity.
+
+Keep CR-owned and annotation-managed objects as separate sets:
+
+- CR-owned: record the CR identity and Secret content, but expect a new CR UID after restore.
+- Annotation-managed: record the complete Secret and preserve the absence of a controller owner.
+
+Use an organization-approved envelope encryption/KMS tool and separate read/write roles. Verify decryptability and object counts in an isolated environment. Reports may contain only boolean equality results and counts.
+
+The repository wrapper requires an absolute executable adapter implementing `encrypt`, `decrypt`, and `validate` subcommands on stdin/stdout. KMS policy, identity, audit logging, retention, and break-glass access remain external production controls; the included self-test adapter is local test material.
+
+Before backup or restore, record the rehearsal in the GitHub release issue and set the
+selected context, server and CA fingerprint, scope, namespace, stopped-controller
+confirmation, encryption adapter, and backup path explicitly. Never use a default
+kubeconfig or implicit context.
+
+```sh
+export KUBECONFIG=/absolute/path/to/approved-kubeconfig
+export KUBE_CONTEXT=approved-cluster
+export CONFIRM_CONTEXT="$KUBE_CONTEXT"
+export EXPECTED_SERVER_URL=https://approved-api.example.invalid:6443
+export EXPECTED_CA_SHA256='<approved-64-hex-ca-fingerprint>'
+export NAMESPACE=secret-generator-system
+export RELEASE_NAME=kubernetes-secret-generator
+export SCOPE_MODE=ownNamespace
+export RELEASE_ISSUE='https://github.com/mittwald/kubernetes-secret-generator/issues/123'
+```
+
+Scale the controller to zero and verify all Pods have terminated. Then create an encrypted backup without a plaintext intermediate file:
+
+```sh
+export ENCRYPTION_ADAPTER=/opt/organization/bin/ksg-kms-adapter
+export BACKUP_FILE=/secure/access-controlled/ksg-v4-backup.enc
+export CONTROLLER_STOPPED_CONFIRM=true
+export BACKUP_CONFIRM="$KUBE_CONTEXT/$NAMESPACE/$RELEASE_NAME"
+
+scripts/backup-restore.sh backup
+scripts/backup-restore.sh verify
+```
+
+The wrapper streams CRDs, CR metadata/spec, and managed Secret payloads directly into the encryption adapter, validates the ciphertext by decrypting through a pipe, writes only a mode-0600 encrypted file, and emits redacted counts. It refuses an existing output path, a live controller, target mismatch, or an invalid adapter payload.
+
+## Restore order: CR-owned
+
+1. Stop the controller and verify no leader remains.
+2. Restore target CRDs and wait for `Established`.
+3. Create CR metadata/spec without source UID/status/resourceVersion.
+4. Read the new CR UID in memory.
+5. Create its Secret with original data/type/user metadata/tracking and an exact controller owner reference using the new UID.
+6. Leave CR status empty; start the controller.
+7. Verify in memory: data/type/labels/annotations equality, owner UID, Ready, and no credential rotation. Print booleans/counts only.
+
+## Restore order: annotation-managed
+
+1. Stop the controller and verify no leader remains.
+2. Create the Secret with original data, type, labels, annotations, immutable bit, and tracking.
+3. Do not add an owner reference or CR.
+4. Start the controller and verify in memory: byte equality, owner absence, and no rotation. Print booleans/counts only.
+
+The wrapper performs both restore modes while leaving the controller stopped. It applies the separately verified target CRDs rather than archived CRDs, rejects destination CR/Secret collisions before data creates, rebuilds CR owner references with new UIDs, and checks data/type/user metadata/tracking equality in memory:
+
+Record the encrypted backup digest and redacted source summary in the release issue before
+restore. Reconfirm the destination context, server, CA, scope, and stopped controller, then
+point restore at the verified target CRDs.
+
+```sh
+export RESTORE_CONFIRM="$KUBE_CONTEXT/$NAMESPACE/$RELEASE_NAME"
+export TARGET_CRD_DIR="$PWD/deploy/crds"
+scripts/backup-restore.sh restore
+```
+
+Inspect the redacted success report, verify Conditions and consumer readiness, and only then resume the Deployment through the approved change. The wrapper intentionally does not restart the controller.
+
+An entire CR-owned Secret deleted without backup can recover only CR-declared/generated fields. Secret-only data and labels are not recoverable. Annotation-managed Secret deletion removes the source object and cannot self-heal.
+
+Practice both restore paths before every major upgrade. Scan backup reports and artifacts with a negative fixture that contains a synthetic Secret-like value; upload must be rejected.

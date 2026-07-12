@@ -76,7 +76,7 @@ func verifyBasicAuthSecretFromCR(t *testing.T, in *v1alpha1.BasicAuth, out *core
 
 	// check if auth field has been generated (with separator)
 	if len(auth) == 0 || !strings.Contains(string(auth), ":") {
-		t.Errorf("auth field has wrong or no values %s", string(auth))
+		t.Errorf("auth field has wrong or no value")
 	}
 
 	// check if custom data entries were set correctly
@@ -111,7 +111,9 @@ func TestControllerGenerateBasicAuthWithoutUsername(t *testing.T) {
 
 	verifyBasicAuthSecretFromCR(t, in, out)
 
-	require.Equal(t, "admin", string(out.Data[secret.FieldBasicAuthUsername]))
+	if string(out.Data[secret.FieldBasicAuthUsername]) != "admin" {
+		t.Fatal("generated BasicAuth username did not use the default")
+	}
 	// check correct deletion of generated secret
 	require.NoError(t, mgr.GetClient().Delete(context.TODO(), in))
 }
@@ -141,7 +143,9 @@ func TestControllerGenerateBasicAuthWithUsername(t *testing.T) {
 
 	verifyBasicAuthSecretFromCR(t, in, out)
 
-	require.Equal(t, testUsername, string(out.Data[secret.FieldBasicAuthUsername]))
+	if string(out.Data[secret.FieldBasicAuthUsername]) != testUsername {
+		t.Fatal("generated BasicAuth username did not match the CR")
+	}
 	// check correct deletion of generated secret
 
 }
@@ -240,13 +244,13 @@ func TestControllerGenerateBasicAuthRegenerate(t *testing.T) {
 	newPassword := string(outNew.Data[secret.FieldBasicAuthPassword])
 	newAuth := string(outNew.Data[secret.FieldBasicAuthIngress])
 
-	// ensure secret has been updated
-	if oldPassword == newPassword {
-		t.Errorf("secret has not been updated")
+	// forceRegenerate is authoritative once per CR generation.
+	if oldPassword != newPassword {
+		t.Errorf("secret regenerated more than once in the same generation")
 	}
 
-	if oldAuth == newAuth {
-		t.Errorf("secret has not been updated")
+	if oldAuth != newAuth {
+		t.Errorf("secret regenerated more than once in the same generation")
 	}
 }
 
