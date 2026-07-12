@@ -5,7 +5,7 @@ global:
 image:
   registry: ghcr.io
   repository: mrchypark/kubernetes-secret-generator
-  tag: v4.0.0-rc.9
+  tag: v4.0.0-rc.10
   digest: ""
   pullPolicy: IfNotPresent
   pullSecrets: []
