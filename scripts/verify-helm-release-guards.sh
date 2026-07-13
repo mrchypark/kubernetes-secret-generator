@@ -325,6 +325,18 @@ if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=tr
 fi
 assert_no_mutation
 
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+	fail 'orphaned Flux adoption accepted missing organizational decommission confirmation'
+fi
+assert_no_mutation
+
 for fixture in wrong-owner wrong-manager unknown-spec; do
 	rm -f "$tmpdir/spec-hash"
 	: >"$log"
@@ -339,6 +351,7 @@ for fixture in wrong-owner wrong-manager unknown-spec; do
 		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
 		CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+		CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
 		"$repo_root/scripts/helm-release.sh" upgrade >"$tmpdir/orphaned-$fixture.out" 2>&1; then
 		fail "orphaned Flux adoption accepted $fixture ownership"
 	fi
@@ -392,6 +405,7 @@ for fixture in active-api active-controller; do
 		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
 		CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+		CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
 		"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 		fail "orphaned Flux adoption accepted $fixture"
 	fi
@@ -407,6 +421,7 @@ common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true 
 	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
 	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+	CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null
 grep -F -q -- '--request-timeout=20s get deployments.apps --all-namespaces' "$log" || fail 'orphaned Flux adoption did not recheck controller deployments'
 grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated orphaned Flux adoption did not continue to manager upgrade'
@@ -419,6 +434,7 @@ if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=tr
 	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
 	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+	CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'orphaned Flux CRD replacement ignored a concurrent resourceVersion conflict'
 fi

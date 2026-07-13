@@ -308,6 +308,8 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			case "$CONFIRM_ORPHANED_FLUX_OWNER" in
 				*/*/*|/*|*/|'') fail 'CONFIRM_ORPHANED_FLUX_OWNER must exactly equal owner-name/owner-namespace' ;;
 			esac
+			[ "${CONFIRM_ORPHANED_FLUX_DECOMMISSIONED:-}" = "$CONFIRM_ORPHANED_FLUX_OWNER" ] ||
+				fail 'CONFIRM_ORPHANED_FLUX_DECOMMISSIONED must exactly match the organizationally decommissioned owner'
 			flux_owner_name=${CONFIRM_ORPHANED_FLUX_OWNER%%/*}
 			flux_owner_namespace=${CONFIRM_ORPHANED_FLUX_OWNER#*/}
 			jq -e --arg name "$flux_owner_name" --arg namespace "$flux_owner_namespace" '(.metadata.managedFields // []) as $fields |

@@ -50,6 +50,8 @@ the replacement. CRDs are updated in place and retained during manager rollback.
 
 For CRDs orphaned after Flux was completely removed, set
 `CONFIRM_ORPHANED_FLUX_OWNER='<kustomization-name>/<kustomization-namespace>'`. The wrapper
+also requires `CONFIRM_ORPHANED_FLUX_DECOMMISSIONED` to match that exact value after the
+GitOps/platform owner confirms the reconciliation source is permanently decommissioned. It
 requires those exact owner labels and managedFields, then immediately verifies that no Flux
 toolkit CRD or known controller Deployment exists. Normal active Flux remains rejected and
 must remain the sole CRD manager.

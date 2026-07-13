@@ -89,6 +89,7 @@ if find "$root" -type d \( -name .git -o -name .cache -o -name vendor \) -prune 
 has "$root/scripts/helm-release.sh" 'validate_legacy_preflight'
 has "$root/scripts/helm-release.sh" '.manager == "kubectl-client-side-apply" and .operation == "Update"'
 has "$root/scripts/helm-release.sh" 'CONFIRM_ORPHANED_FLUX_OWNER'
+has "$root/scripts/helm-release.sh" 'CONFIRM_ORPHANED_FLUX_DECOMMISSIONED'
 has "$root/scripts/helm-release.sh" '.manager == "kustomize-controller" and .operation == "Apply"'
 has "$root/scripts/helm-release.sh" 'endswith(".toolkit.fluxcd.io")'
 has "$root/scripts/helm-release.sh" 'get deployments.apps --all-namespaces'
