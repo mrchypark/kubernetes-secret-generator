@@ -13,6 +13,7 @@ workdir=$(mktemp -d "${TMPDIR:-/tmp}/ksg-release.XXXXXX")
 created=false
 watchdog=
 recreate_observer_pid=
+recreate_producer_pid=
 started=$(date +%s)
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
@@ -37,6 +38,7 @@ cleanup() {
 	trap - 0 1 2 15
 	[ -z "$watchdog" ] || kill "$watchdog" 2>/dev/null || true
 	[ -z "$recreate_observer_pid" ] || kill "$recreate_observer_pid" 2>/dev/null || true
+	[ -z "$recreate_producer_pid" ] || kill "$recreate_producer_pid" 2>/dev/null || true
 	if [ "$created" = true ]; then
 		owner=$(k get namespace kube-system -o jsonpath='{.metadata.labels.ksg-test-owner}' 2>/dev/null || true)
 		if [ "$owner" != "$run_id" ]; then
@@ -394,6 +396,8 @@ observe_v4_recreate_upgrade() {
 	recreate_ready=$workdir/recreate-observer.ready
 	recreate_stop=$workdir/recreate-observer.stop
 	recreate_summary=$workdir/recreate-observation.json
+	recreate_fifo=$workdir/recreate-observer.fifo
+	mkfifo "$recreate_fifo"
 	(
 		while :; do
 			k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json |
@@ -401,8 +405,10 @@ observe_v4_recreate_upgrade() {
 			[ ! -e "$recreate_stop" ] || break
 			sleep 0.1
 		done
-	) | OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" \
-		"$repo_root/test/e2e/recreate-observer.sh" &
+	) >"$recreate_fifo" &
+	recreate_producer_pid=$!
+	OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" STOP_FILE="$recreate_stop" \
+		"$repo_root/test/e2e/recreate-observer.sh" <"$recreate_fifo" &
 	recreate_observer_pid=$!
 	i=0
 	while [ "$i" -lt 100 ] && [ ! -e "$recreate_ready" ]; do
@@ -415,7 +421,9 @@ observe_v4_recreate_upgrade() {
 		--namespace "$namespace" --skip-crds --reuse-values \
 		--set terminationGracePeriodSeconds=31 --wait --timeout 180s >/dev/null; then
 		: >"$recreate_stop"
+		wait "$recreate_producer_pid" 2>/dev/null || true
 		wait "$recreate_observer_pid" 2>/dev/null || true
+		recreate_producer_pid=
 		recreate_observer_pid=
 		fail 'public v4 Recreate upgrade failed'
 	fi
@@ -423,11 +431,15 @@ observe_v4_recreate_upgrade() {
 		jq -er 'if (.items | length) == 1 then .items[0].metadata.name else error("expected one replacement Pod") end')
 	k -n "$namespace" wait --for=condition=Ready --timeout=60s "pod/$new_v4_pod" >/dev/null
 	: >"$recreate_stop"
+	producer_status=0
+	wait "$recreate_producer_pid" || producer_status=$?
+	recreate_producer_pid=
 	if ! wait "$recreate_observer_pid"; then
 		recreate_observer_pid=
 		fail 'Recreate observer rejected the live Pod UID sequence'
 	fi
 	recreate_observer_pid=
+	[ "$producer_status" -eq 0 ] || fail 'Recreate observation producer ended before the intentional stop handshake'
 	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxPods <= 1 and .zeroObserved == true and .oldUID == $old and .newUID != $old and .order == ["old","zero","new"]' \
 		"$recreate_summary" >/dev/null || fail 'Recreate observation summary is incomplete'
 	assert_single_controller

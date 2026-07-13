@@ -91,8 +91,9 @@ for contract in \
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
 for contract in \
-	'OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary"' \
-	'"$repo_root/test/e2e/recreate-observer.sh" &' \
+	'OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" STOP_FILE="$recreate_stop"' \
+	'"$repo_root/test/e2e/recreate-observer.sh" <"$recreate_fifo" &' \
+	'wait "$recreate_producer_pid" || producer_status=$?' \
 	'--set terminationGracePeriodSeconds=31 --wait --timeout 180s' \
 	'wait --for=condition=Ready --timeout=60s "pod/$new_v4_pod"' \
 	'rotation state did not settle before v4-to-v4 Recreate upgrade' \
@@ -103,16 +104,20 @@ for contract in \
 done
 [ -x "$recreate_observer" ] || fail 'Recreate observer is not executable'
 [ -x "$recreate_observer_test" ] || fail 'Recreate observer negative-fixture test is not executable'
+grep -F -q "reject premature-eof false '[\"old\"]' '[]' '[\"new\"]'" "$recreate_observer_test" || fail 'premature observer EOF negative fixture is missing'
 "$recreate_observer_test"
 
-observer_line=$(grep -n -F '"$repo_root/test/e2e/recreate-observer.sh" &' "$release" | cut -d: -f1)
+producer_line=$(grep -n -F 'recreate_producer_pid=$!' "$release" | cut -d: -f1)
+observer_line=$(grep -n -F 'recreate_observer_pid=$!' "$release" | cut -d: -f1)
 ready_line=$(grep -n -F '[ -e "$recreate_ready" ] || fail' "$release" | cut -d: -f1)
 upgrade_line=$(grep -n -F -- '--set terminationGracePeriodSeconds=31 --wait --timeout 180s' "$release" | cut -d: -f1)
 stop_line=$(grep -n -F ': >"$recreate_stop"' "$release" | tail -n 1 | cut -d: -f1)
+producer_wait_line=$(grep -n -F 'wait "$recreate_producer_pid" || producer_status=$?' "$release" | cut -d: -f1)
 wait_line=$(grep -n -F 'wait "$recreate_observer_pid"; then' "$release" | cut -d: -f1)
 summary_line=$(grep -n -F 'Recreate observation summary is incomplete' "$release" | cut -d: -f1)
-[ "$observer_line" -lt "$ready_line" ] && [ "$ready_line" -lt "$upgrade_line" ] && \
-	[ "$upgrade_line" -lt "$stop_line" ] && [ "$stop_line" -lt "$wait_line" ] && [ "$wait_line" -lt "$summary_line" ] ||
+[ "$producer_line" -lt "$observer_line" ] && [ "$observer_line" -lt "$ready_line" ] && [ "$ready_line" -lt "$upgrade_line" ] && \
+	[ "$upgrade_line" -lt "$stop_line" ] && [ "$stop_line" -lt "$producer_wait_line" ] && [ "$producer_wait_line" -lt "$wait_line" ] && \
+	[ "$wait_line" -lt "$summary_line" ] ||
 	fail 'Recreate observer is not ordered around the live Helm upgrade'
 ! grep -F -q -- '--set installCRDs=true' "$release" || fail 'v3 runtime chart must not replace the original e159 CRD fixtures'
 grep -F -q 'jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"' "$release" || fail 'release smoke does not use the managed fixture inventory filter'

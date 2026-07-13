@@ -4,6 +4,7 @@ set -eu
 old_uid=${OLD_UID:?OLD_UID is required}
 ready_file=${READY_FILE:?READY_FILE is required}
 summary_file=${SUMMARY_FILE:?SUMMARY_FILE is required}
+stop_file=${STOP_FILE:?STOP_FILE is required}
 
 fail() {
 	printf 'error: recreate observation failed: %s\n' "$*" >&2
@@ -44,6 +45,7 @@ while IFS= read -r snapshot; do
 	esac
 done
 
+[ -e "$stop_file" ] || fail 'observation input ended without the intentional stop handshake'
 [ "$state" = new ] || fail 'observation ended before a replacement Pod appeared'
 jq -cn --arg old "$old_uid" --arg new "$new_uid" --argjson samples "$samples" \
 	--argjson maxPods "$max_pods" --argjson zeroObserved "$zero_observed" \
