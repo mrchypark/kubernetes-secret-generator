@@ -27,6 +27,7 @@ export KUBE_CONTEXT=approved-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
+export DEPLOYMENT_NAME=kubernetes-secret-generator
 export CHART_VERSION=4.0.0-rc.12
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
@@ -55,6 +56,26 @@ GitOps/platform owner confirms the reconciliation source is permanently decommis
 requires those exact owner labels and managedFields, then immediately verifies that no Flux
 toolkit CRD or known controller Deployment exists. Normal active Flux remains rejected and
 must remain the sole CRD manager.
+
+Also set independent non-secret `ORPHANED_FLUX_APPROVAL_REF` and
+`ORPHANED_FLUX_APPROVER` values. Scale `DEPLOYMENT_NAME` to zero, wait for zero matching
+Pods and an absent or unowned `kubernetes-secret-generator-lock` Lease, then set
+`CONTROLLER_STOPPED_CONFIRM=true`. The wrapper rechecks all of these immediately before its
+first CRD replacement and persists the approval evidence in the lifecycle owner ConfigMap.
+
+If any dry-run, replace, or non-forcing SSA operation fails, Helm is not invoked and the
+controller must remain stopped. The command emits only CRD identity inventory and retains an
+exact rc12 recovery directory. Review and run the printed remaining UID/resourceVersion
+replacements, printed canonical-bundle SSA, and three-CRD `Established` wait. Then verify:
+
+```sh
+kubectl --context "$KUBE_CONTEXT" get crd/basicauths.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.username.type}{"\n"}'
+kubectl --context "$KUBE_CONTEXT" get crd/sshkeypairs.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.algorithm.type}{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.privateKeyField.type}{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.publicKeyField.type}{"\n"}'
+kubectl --context "$KUBE_CONTEXT" get crd/stringsecrets.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.fields.type}{"\n"}'
+```
+
+Expected outputs are `string`, `stringstringstring`, and `array`. Only after all three match
+may the operator install v4 or deliberately restart the v3.4.1 manager.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
 before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.12 release

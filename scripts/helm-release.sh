@@ -77,7 +77,8 @@ validate_legacy_preflight() {
 	report_sha=$(openssl dgst -sha256 -r "$RAW_V3_PREFLIGHT_REPORT" | awk '{print $1}')
 	[ "$report_sha" = "$RAW_V3_PREFLIGHT_SHA256" ] || fail 'RAW_V3_PREFLIGHT_SHA256 does not match the report'
 	jq -e --arg context "$KUBE_CONTEXT" --arg server "$server" --arg ca "$ca_sha" --arg namespace "$NAMESPACE" --arg release "$RELEASE_NAME" \
-		'.schemaVersion == 1 and .blockerCount == 0 and .target.context == $context and .target.server == $server and .target.caSHA256 == $ca and .target.releaseNamespace == $namespace and .target.releaseName == $release and ((.generatedAt | fromdateiso8601) <= now) and (now - (.generatedAt | fromdateiso8601) <= 86400)' \
+		--arg deployment "$DEPLOYMENT_NAME" \
+		'.schemaVersion == 1 and .blockerCount == 0 and .target.context == $context and .target.server == $server and .target.caSHA256 == $ca and .target.releaseNamespace == $namespace and .target.releaseName == $release and .target.deploymentName == $deployment and ((.generatedAt | fromdateiso8601) <= now) and (now - (.generatedAt | fromdateiso8601) <= 86400)' \
 		"$RAW_V3_PREFLIGHT_REPORT" >/dev/null || fail 'RAW_V3_PREFLIGHT_REPORT is not a zero-blocker report for this exact target'
 }
 
@@ -132,11 +133,18 @@ actual_chart_version=$(awk '$1 == "version:" { print $2; exit }' "$chart_dir/Cha
 [ "$actual_chart_version" = "$CHART_VERSION" ] || fail "CHART_VERSION does not match local chart ($actual_chart_version)"
 
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ksg-release.XXXXXX")
-trap 'rm -rf "$tmpdir"' 0 1 2 15
+preserve_tmp=false
+cleanup() { [ "$preserve_tmp" = true ] || rm -rf "$tmpdir"; }
+trap cleanup 0 1 2 15
 scope_values=$tmpdir/scope-values.yaml
 compatibility_profile=${COMPATIBILITY_PROFILE:-v4}
 leader_election_enabled=${LEADER_ELECTION_ENABLED:-true}
 leader_election_id=${LEADER_ELECTION_ID:-kubernetes-secret-generator-lock}
+orphaned_flux_approval_ref=${ORPHANED_FLUX_APPROVAL_REF:-}
+orphaned_flux_approver=${ORPHANED_FLUX_APPROVER:-}
+case "$orphaned_flux_approval_ref:$orphaned_flux_approver" in
+	*[!A-Za-z0-9@._:/#-]*) fail 'orphaned Flux approval evidence contains unsupported characters' ;;
+esac
 case "$compatibility_profile" in
 	v4|v3.4.1) ;;
 	*) fail 'COMPATIBILITY_PROFILE must be v4 or v3.4.1' ;;
@@ -186,6 +194,7 @@ fi
 	else
 		printf 'migration:\n  confirmedScope: ""\n  confirmedNamespacesSHA256: ""\n'
 	fi
+	printf '  orphanedFluxApprovalRef: "%s"\n  orphanedFluxApprover: "%s"\n' "$orphaned_flux_approval_ref" "$orphaned_flux_approver"
 	printf 'crdLifecycle:\n  manager: direct\n'
 	printf 'compatibilityProfile: %s\n' "$compatibility_profile"
 	printf 'leaderElection:\n  enabled: %s\n  id: %s\n' "$leader_election_enabled" "$leader_election_id"
@@ -279,6 +288,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 	[ "$legacy_crd_count" -eq 3 ] || fail 'mixed marked and unmarked CRDs require manual review'
 	[ "$action" = upgrade ] || [ "$RAW_V3_MIGRATION" = true ] || fail 'unmarked CRDs cannot be adopted by a fresh install'
 	require CONFIRM_LEGACY_CRD_ADOPTION
+	require DEPLOYMENT_NAME
 	[ "$CONFIRM_LEGACY_CRD_ADOPTION" = v3.4.1 ] || fail 'CONFIRM_LEGACY_CRD_ADOPTION must exactly equal v3.4.1'
 	command -v jq >/dev/null 2>&1 || fail 'jq is required to verify legacy CRD identity'
 	command -v openssl >/dev/null 2>&1 || fail 'openssl is required to verify legacy CRD identity'
@@ -310,6 +320,12 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			esac
 			[ "${CONFIRM_ORPHANED_FLUX_DECOMMISSIONED:-}" = "$CONFIRM_ORPHANED_FLUX_OWNER" ] ||
 				fail 'CONFIRM_ORPHANED_FLUX_DECOMMISSIONED must exactly match the organizationally decommissioned owner'
+			require ORPHANED_FLUX_APPROVAL_REF
+			require ORPHANED_FLUX_APPROVER
+			[ "$ORPHANED_FLUX_APPROVAL_REF" != "$ORPHANED_FLUX_APPROVER" ] &&
+				[ "$ORPHANED_FLUX_APPROVAL_REF" != "$CONFIRM_ORPHANED_FLUX_OWNER" ] &&
+				[ "$ORPHANED_FLUX_APPROVER" != "$CONFIRM_ORPHANED_FLUX_OWNER" ] ||
+				fail 'orphaned Flux approval reference and approver must be independent evidence'
 			flux_owner_name=${CONFIRM_ORPHANED_FLUX_OWNER%%/*}
 			flux_owner_namespace=${CONFIRM_ORPHANED_FLUX_OWNER#*/}
 			jq -e --arg name "$flux_owner_name" --arg namespace "$flux_owner_namespace" '(.metadata.managedFields // []) as $fields |
@@ -318,7 +334,8 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 				.metadata.labels["kustomize.toolkit.fluxcd.io/namespace"] == $namespace and
 				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and
 					.apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and
-					(.fieldsV1 | has("f:spec")) and ((.fieldsV1 | keys) - ["f:metadata","f:spec"] | length) == 0) and
+					(.fieldsV1 | keys) == ["f:metadata","f:spec"] and
+					.fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) and
 				any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and
 					.apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and
 					(.fieldsV1 | keys) == ["f:status"])' "$live_crd" >/dev/null || {
@@ -341,6 +358,10 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 		[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd is unmarked but does not match the pinned v3.4.1 CRD spec"
 	done
 	[ -z "${CONFIRM_ORPHANED_FLUX_OWNER:-}" ] || [ "$orphaned_flux_adoption" = true ] || fail 'CONFIRM_ORPHANED_FLUX_OWNER is only valid for exact orphaned Flux ownership'
+	if [ "$orphaned_flux_adoption" = false ]; then
+		[ -z "${CONFIRM_ORPHANED_FLUX_DECOMMISSIONED:-}${ORPHANED_FLUX_APPROVAL_REF:-}${ORPHANED_FLUX_APPROVER:-}${CONTROLLER_STOPPED_CONFIRM:-}" ] ||
+			fail 'orphaned Flux confirmations are only valid for exact orphaned Flux ownership'
+	fi
 	adopt_legacy_crds=true
 fi
 
@@ -389,20 +410,12 @@ cmp -s "$canonical_crds" "$crd_bundle" || fail 'packaged chart CRDs differ from 
 if [ "$adopt_legacy_crds" = true ]; then
 	current_preflight=$tmpdir/current-preflight.json
 	CONFIRM_CONTEXT="$KUBE_CONTEXT" EXPECTED_SERVER_URL="$server" EXPECTED_CA_SHA256="$ca_sha" \
-		DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-$RELEASE_NAME}" \
+		RAW_V3_MIGRATION="$RAW_V3_MIGRATION" DEPLOYMENT_NAME="$DEPLOYMENT_NAME" \
 		SCOPE_MODE="$SCOPE_MODE" CONFIRMED_SCOPE="$CONFIRMED_SCOPE" \
 		SCOPE_NAMESPACES="${SCOPE_NAMESPACES:-}" CONFIRMED_NAMESPACES_SHA256="${CONFIRMED_NAMESPACES_SHA256:-}" \
 		"$repo_root/scripts/preflight-v4.sh" >"$current_preflight" || fail 'immediate legacy-adoption preflight reported blockers or an unstable snapshot'
 	[ "$(jq -r '.blockerCount' "$current_preflight")" -eq 0 ] || fail 'immediate legacy-adoption preflight reported blockers'
-	if [ "$orphaned_flux_adoption" = true ]; then
-		flux_crds=$tmpdir/flux-crds.json
-		flux_deployments=$tmpdir/flux-deployments.json
-		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get customresourcedefinitions.apiextensions.k8s.io -o json >"$flux_crds"
-		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployments.apps --all-namespaces -o json >"$flux_deployments"
-		jq -e '[.items[]? | select(.metadata.name | endswith(".toolkit.fluxcd.io"))] | length == 0' "$flux_crds" >/dev/null &&
-			jq -e '[.items[]? | select(.metadata.name as $name | ["source-controller","kustomize-controller","helm-controller","notification-controller","image-reflector-controller","image-automation-controller"] | index($name))] | length == 0' "$flux_deployments" >/dev/null ||
-			fail 'active Flux API or controller detected; refusing orphaned ownership adoption'
-	fi
+	[ "$(jq -r '.target.deploymentName' "$current_preflight")" = "$DEPLOYMENT_NAME" ] || fail 'immediate legacy-adoption preflight targeted a different Deployment'
 	for crd_file in "$chart_dir"/crds/*_crd.yaml; do
 		crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
 		live_crd=$legacy_live_dir/$crd.json
@@ -412,9 +425,56 @@ if [ "$adopt_legacy_crds" = true ]; then
 		target_crd=$tmpdir/target-$crd.json
 		kubectl --context "$KUBE_CONTEXT" create --dry-run=client --filename "$crd_file" --output json |
 			jq --arg uid "$uid" --arg rv "$resource_version" '.metadata.uid=$uid | .metadata.resourceVersion=$rv' >"$target_crd"
-		kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null
-		kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd"
-		kubectl --context "$KUBE_CONTEXT" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "$crd_file" >/dev/null
+	done
+	if [ "$orphaned_flux_adoption" = true ]; then
+		[ "${CONTROLLER_STOPPED_CONFIRM:-}" = true ] || fail 'CONTROLLER_STOPPED_CONFIRM must exactly equal true for orphaned Flux adoption'
+		flux_crds=$tmpdir/flux-crds.json
+		flux_deployments=$tmpdir/flux-deployments.json
+		stopped_deployment=$tmpdir/stopped-deployment.json
+		stopped_pods=$tmpdir/stopped-pods.json
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get customresourcedefinitions.apiextensions.k8s.io -o json >"$flux_crds"
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployments.apps --all-namespaces -o json >"$flux_deployments"
+		jq -e '[.items[]? | select(.metadata.name | endswith(".toolkit.fluxcd.io"))] | length == 0' "$flux_crds" >/dev/null &&
+			jq -e '[.items[]? | select(.metadata.name as $name | ["source-controller","kustomize-controller","helm-controller","notification-controller","image-reflector-controller","image-automation-controller"] | index($name))] | length == 0' "$flux_deployments" >/dev/null ||
+			fail 'active Flux API or controller detected; refusing orphaned ownership adoption'
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployment "$DEPLOYMENT_NAME" --namespace "$NAMESPACE" -o json >"$stopped_deployment"
+		jq -e --arg name "$DEPLOYMENT_NAME" '.metadata.name == $name and .spec.replicas == 0 and (.status.readyReplicas // 0) == 0 and (.status.availableReplicas // 0) == 0' "$stopped_deployment" >/dev/null ||
+			fail 'legacy Deployment must have replicas=0 and ready/available replicas=0 before orphaned adoption'
+		pod_selector=$(jq -er '.spec.selector.matchLabels | to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(",") | select(length > 0)' "$stopped_deployment")
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get pods --namespace "$NAMESPACE" --selector "$pod_selector" -o json >"$stopped_pods"
+		jq -e '.items | length == 0' "$stopped_pods" >/dev/null || fail 'legacy controller Pods still exist; refusing orphaned adoption'
+		lease_holder=$(kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get lease "$leader_election_id" --namespace "$NAMESPACE" --ignore-not-found -o jsonpath='{.spec.holderIdentity}')
+		[ -z "$lease_holder" ] || fail 'leader Lease remains owned; clear only through the approved downtime runbook'
+	fi
+	completed_crds='|'
+	adoption_failed() {
+		preserve_tmp=true
+		printf 'error: CRD adoption stopped at %s for %s; Helm was not invoked and the controller must remain stopped\n' "$1" "$2" >&2
+		printf 'recovery inventory (identity only):\n' >&2
+		for recovery_crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
+			kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$recovery_crd" \
+				-o jsonpath='{.metadata.name}{" uid="}{.metadata.uid}{" rv="}{.metadata.resourceVersion}{" schema-release="}{.metadata.annotations.secretgenerator\.mittwald\.de/schema-release}{"\n"}' >&2 ||
+				printf '%s inventory unavailable\n' "$recovery_crd" >&2
+		done
+		printf 'review and run only these exact rc12 recovery commands while the Deployment stays at zero replicas:\n' >&2
+		for recovery_target in "$tmpdir"/target-*.json; do
+			recovery_crd=$(jq -er '.metadata.name' "$recovery_target")
+			case "$completed_crds" in *"|$recovery_crd|"*) continue ;; esac
+			printf 'kubectl --context "%s" replace --field-manager kubernetes-secret-generator-crd-manager --filename "%s"\n' "$KUBE_CONTEXT" "$recovery_target" >&2
+		done
+		printf 'kubectl --context "%s" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "%s"\n' "$KUBE_CONTEXT" "$canonical_crds" >&2
+		printf 'kubectl --context "%s" wait --for=condition=Established --timeout=60s crd/basicauths.secretgenerator.mittwald.de crd/sshkeypairs.secretgenerator.mittwald.de crd/stringsecrets.secretgenerator.mittwald.de\n' "$KUBE_CONTEXT" >&2
+		printf 'verify username=string, SSH algorithm/private/public=stringstringstring, and String fields=array using the schema checks in docs/UPGRADE.md; only then install v4 or deliberately restart v3.4.1\n' >&2
+		printf 'recovery files retained at %s\n' "$tmpdir" >&2
+		exit 2
+	}
+	for crd_file in "$chart_dir"/crds/*_crd.yaml; do
+		crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
+		target_crd=$tmpdir/target-$crd.json
+		kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed server-dry-run "$crd"
+		kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed replace "$crd"
+		completed_crds="$completed_crds$crd|"
+		kubectl --context "$KUBE_CONTEXT" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "$crd_file" >/dev/null || adoption_failed server-side-apply "$crd"
 	done
 else
 	kubectl --context "$KUBE_CONTEXT" apply --server-side --dry-run=server \

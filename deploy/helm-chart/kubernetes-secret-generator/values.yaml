@@ -23,6 +23,8 @@ scope:
 migration:
   confirmedScope: ""
   confirmedNamespacesSHA256: ""
+  orphanedFluxApprovalRef: ""
+  orphanedFluxApprover: ""
 
 # CRD installation/upgrades are a separate lifecycle. The direct manager is
 # scripts/helm-release.sh; Flux uses HelmRelease CreateReplace policies.

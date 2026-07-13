@@ -56,10 +56,12 @@
     "migration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["confirmedScope", "confirmedNamespacesSHA256"],
+      "required": ["confirmedScope", "confirmedNamespacesSHA256", "orphanedFluxApprovalRef", "orphanedFluxApprover"],
       "properties": {
         "confirmedScope": { "enum": ["", "ownNamespace", "namespaces", "cluster"] },
-        "confirmedNamespacesSHA256": { "type": "string", "pattern": "^$|^[0-9a-f]{64}$" }
+        "confirmedNamespacesSHA256": { "type": "string", "pattern": "^$|^[0-9a-f]{64}$" },
+        "orphanedFluxApprovalRef": { "type": "string", "pattern": "^[A-Za-z0-9@._:/#-]*$" },
+        "orphanedFluxApprover": { "type": "string", "pattern": "^[A-Za-z0-9@._:/#-]*$" }
       }
     },
     "crdLifecycle": {

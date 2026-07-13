@@ -5,7 +5,7 @@ Rollback keeps the v4 chart, values schema, rendered RBAC, and CRDs. Only the ma
 ## Required artifacts and preflight
 
 - Exact v4 release chart/bundle and the current values; do not re-render from another commit.
-- A v3.4.1 compatibility digest rebuilt from the exact v3.4.1 source/tag and checked for platform startup, SBOM, signature, and vulnerabilities.
+- A v3.4.1 compatibility digest built from tag commit `b01e37dce377e5e4296392b7e4d823b6830b763e` and checked for platform startup, SBOM, signature, and vulnerabilities. This image provenance is distinct from the original e15976c CRD fixture source.
 - Encrypted backup proven restorable; approved list of credentials already rotated by v4.
 - Every CR has `forceRegenerate=false`.
 - Every managed Secret `regenerate` annotation, including `false`, is removed or explicitly approved for rotation because v3 BasicAuth/SSH treats any non-empty value as a trigger.

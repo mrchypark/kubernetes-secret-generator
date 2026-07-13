@@ -124,6 +124,7 @@ k label namespace "$namespace" "ksg-test-owner=$run_id" pod-security.kubernetes.
 kind load docker-image "$v3_local_image" --name "$cluster" >/dev/null
 kind load docker-image "$candidate_local_image" --name "$cluster" >/dev/null
 
+# The original release-bump CRDs predate the later v3.4.1 tag/image commit.
 v3_tree=$workdir/v3
 mkdir "$v3_tree"
 git -C "$repo_root" archive e15976ccd356c260be6e691b4d26d55005800b91 deploy | tar -x -C "$v3_tree"
