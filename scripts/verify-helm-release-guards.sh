@@ -26,7 +26,7 @@ case "$1" in
 	template) printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.11.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.12.tgz"; break; fi
 			shift
 		done
 		;;
@@ -45,6 +45,20 @@ case "$*" in
 	*certificate-authority-data*) printf '%s' 'dGVzdC1jYQ==' ;;
 	*config\ view*) printf '%s' 'https://target.example.invalid' ;;
 	*get\ configmaps*) printf '%b' "${MOCK_OWNER_RECORD:-}" ;;
+	*--request-timeout=20s\ get\ customresourcedefinitions.apiextensions.k8s.io*)
+		if [ "${MOCK_ACTIVE_FLUX_API:-false}" = true ]; then
+			printf '%s' '{"apiVersion":"v1","kind":"List","items":[{"metadata":{"name":"kustomizations.kustomize.toolkit.fluxcd.io"}}]}'
+		else
+			printf '%s' '{"apiVersion":"v1","kind":"List","items":[]}'
+		fi
+		;;
+	*--request-timeout=20s\ get\ deployments.apps*)
+		if [ "${MOCK_ACTIVE_FLUX_CONTROLLER:-false}" = true ]; then
+			printf '%s' '{"apiVersion":"v1","kind":"List","items":[{"metadata":{"name":"kustomize-controller","namespace":"flux-system"}}]}'
+		else
+			printf '%s' '{"apiVersion":"v1","kind":"List","items":[]}'
+		fi
+		;;
 	*schema-release*)
 		if [ "${MOCK_CRD_EXISTS:-false}" = true ] || [ -n "${MOCK_CRD_VERSION:-}" ]; then
 			printf 'uid-1|%s' "${MOCK_CRD_VERSION:-}"
@@ -71,15 +85,16 @@ JSON
 	*' -o json')
 		case "$*" in
 			*customresourcedefinition/basicauths.*) hash=6d90f44c610fe07c51aa729946c8368296d1bfe8bea2bb098cbd85c3a36c59f5 ;;
-			*customresourcedefinition/sshkeypairs.*) hash=2a366ddc189823995403b2fb1b278387a108478686adfde7096586a276b42ddf ;;
+			*customresourcedefinition/sshkeypairs.*) hash=fd44204099ac052e2518b63cddfb9d677edbb539860463898ec28c267f12eaed ;;
 			*customresourcedefinition/stringsecrets.*) hash=569acb9a3ff0dac64254fc72dd276b3ae29c7947da92c08120e18ccba8827871 ;;
 			*) exit 71 ;;
 		esac
 		printf '%s' "$hash" >"$MOCK_SPEC_HASH"
 		extra=
 		[ "${MOCK_EXTRA_MANAGER:-false}" != true ] || extra=',{"manager":"unknown-reconciler","operation":"Apply","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:spec":{}}}'
-		printf '{"metadata":{"uid":"uid-1","resourceVersion":"10","managedFields":[{"manager":"kube-apiserver","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","subresource":"status","fieldsV1":{"%s":{}}},{"manager":"%s","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:metadata":{},"f:spec":{}}}%s]},"spec":{}}' \
-			"${MOCK_STATUS_FIELD:-f:status}" "${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}" "$extra"
+		printf '{"metadata":{"uid":"uid-1","resourceVersion":"10","labels":{"kustomize.toolkit.fluxcd.io/name":"%s","kustomize.toolkit.fluxcd.io/namespace":"%s"},"managedFields":[{"manager":"kube-apiserver","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","subresource":"status","fieldsV1":{"%s":{}}},{"manager":"%s","operation":"%s","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:metadata":{},"f:spec":{}}}%s]},"spec":{}}' \
+			"${MOCK_OWNER_NAME:-dev-infra-stable}" "${MOCK_OWNER_NAMESPACE:-gitops}" "${MOCK_STATUS_FIELD:-f:status}" \
+			"${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}" "${MOCK_FIELD_OPERATION:-Update}" "$extra"
 		;;
 	*create\ --dry-run=client*) printf '%s' '{"apiVersion":"apiextensions.k8s.io/v1","kind":"CustomResourceDefinition","metadata":{"name":"mock"},"spec":{}}' ;;
 	*replace\ --dry-run=server*) ;;
@@ -111,7 +126,7 @@ common_env() {
 	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.11 \
+		NAMESPACE=ksg-system RELEASE_NAME=ksg CHART_VERSION=4.0.0-rc.12 \
 		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
 }
 
@@ -191,7 +206,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.11\townNamespace\t\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system\towner\tflux\tksg-system\tksg\t4.0.0-rc.12\townNamespace\t\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -214,7 +229,7 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.11\townNamespace\t\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system\towner\tdirect\tksg-system\tksg\t4.0.0-rc.12\townNamespace\t\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null
@@ -299,6 +314,39 @@ if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=tr
 fi
 assert_no_mutation
 
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+	fail 'orphaned Flux adoption accepted missing owner confirmation'
+fi
+assert_no_mutation
+
+for fixture in wrong-owner wrong-manager unknown-spec; do
+	rm -f "$tmpdir/spec-hash"
+	: >"$log"
+	case "$fixture" in
+		wrong-owner) set -- MOCK_OWNER_NAME=other ;;
+		wrong-manager) set -- MOCK_FIELD_MANAGER=other-controller ;;
+		unknown-spec) set -- MOCK_EXTRA_MANAGER=true ;;
+	esac
+	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply "$@" \
+		EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+		CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+		"$repo_root/scripts/helm-release.sh" upgrade >"$tmpdir/orphaned-$fixture.out" 2>&1; then
+		fail "orphaned Flux adoption accepted $fixture ownership"
+	fi
+	grep -F -q 'managedFields or orphaned Flux owner labels are not the exact allowed set' "$tmpdir/orphaned-$fixture.out" || fail "$fixture omitted the safe ownership diagnostic"
+	grep -F -q '"fieldPaths"' "$tmpdir/orphaned-$fixture.out" || fail "$fixture diagnostic omitted redacted field paths"
+	assert_no_mutation
+done
+
 for fixture in unknown-manager status-spec-owner; do
 	rm -f "$tmpdir/spec-hash"
 	: >"$log"
@@ -331,14 +379,48 @@ grep -F -q 'kubectl --context explicit-target apply --server-side --field-manage
 if grep -F -q -- '--force-conflicts' "$log"; then fail 'legacy CRD replacement used force-conflicts'; fi
 grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated legacy CRD takeover did not continue to manager upgrade'
 
+for fixture in active-api active-controller; do
+	rm -f "$tmpdir/spec-hash"
+	: >"$log"
+	case "$fixture" in
+		active-api) set -- MOCK_ACTIVE_FLUX_API=true ;;
+		active-controller) set -- MOCK_ACTIVE_FLUX_CONTROLLER=true ;;
+	esac
+	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply "$@" \
+		EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+		CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+		"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
+		fail "orphaned Flux adoption accepted $fixture"
+	fi
+	grep -F -q -- '--request-timeout=20s get customresourcedefinitions.apiextensions.k8s.io' "$log" || fail "$fixture did not immediately recheck Flux APIs"
+	assert_no_mutation
+done
+
 rm -f "$tmpdir/spec-hash"
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_CONFLICT=true \
+common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
 	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
 	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null
+grep -F -q -- '--request-timeout=20s get deployments.apps --all-namespaces' "$log" || fail 'orphaned Flux adoption did not recheck controller deployments'
+grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated orphaned Flux adoption did not continue to manager upgrade'
+
+rm -f "$tmpdir/spec-hash"
+: >"$log"
+if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_CONFLICT=true \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
-	fail 'legacy CRD replacement ignored a concurrent resourceVersion conflict'
+	fail 'orphaned Flux CRD replacement ignored a concurrent resourceVersion conflict'
 fi
 grep -F -q 'kubectl --context explicit-target replace --field-manager kubernetes-secret-generator-crd-manager' "$log" || fail 'concurrency fixture did not reach guarded CRD replacement'
 if grep -F -q 'helm upgrade ksg ' "$log"; then fail 'manager rollout continued after a CRD resourceVersion conflict'; fi

@@ -126,7 +126,7 @@ kind load docker-image "$candidate_local_image" --name "$cluster" >/dev/null
 
 v3_tree=$workdir/v3
 mkdir "$v3_tree"
-git -C "$repo_root" archive b01e37dce377e5e4296392b7e4d823b6830b763e deploy | tar -x -C "$v3_tree"
+git -C "$repo_root" archive e15976ccd356c260be6e691b4d26d55005800b91 deploy | tar -x -C "$v3_tree"
 k apply -f "$repo_root/test/fixtures/v3.4.1/crds" >/dev/null
 k wait --for=condition=Established --timeout=60s \
 	crd/basicauths.secretgenerator.mittwald.de \

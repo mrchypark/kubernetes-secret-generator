@@ -4,7 +4,7 @@ All notable changes are recorded here. Releases follow semantic versioning.
 
 ## [Unreleased]
 
-The next artifact is `v4.0.0-rc.11`, a release candidate without SLA, capacity, HA, or
+The next artifact is `v4.0.0-rc.12`, a release candidate without SLA, capacity, HA, or
 production-certification claims.
 
 ### Changed

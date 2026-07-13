@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "tag": "v3.4.1",
-  "commit": "b01e37dce377e5e4296392b7e4d823b6830b763e",
+  "commit": "e15976ccd356c260be6e691b4d26d55005800b91",
   "image": "ghcr.io/mrchypark/kubernetes-secret-generator",
   "architectures": ["amd64", "arm64"],
   "files": {
-    "SOURCE": "sha256:769dbafb356b8bb004370a1fe138c95c79178afc9a5950b70a3eb3441726f1f1",
+    "SOURCE": "sha256:3d283b006d5a0198afa569a1e0fee985fe4a09f67d602eeecf62758f53437415",
     "crds/secretgenerator.mittwald.de_basicauths_crd.yaml": "sha256:16be3509de5a80b15c63dad80cc96e6ebf935dd16accbd499591f047f1ed8870",
-    "crds/secretgenerator.mittwald.de_sshkeypairs_crd.yaml": "sha256:6c072fead6b5151e4151afd46839410ec9cd50a870c38d861f5a52ab08a8ddd6",
+    "crds/secretgenerator.mittwald.de_sshkeypairs_crd.yaml": "sha256:1062b0f1a07348f3f09f8b3098f7259951b744d86150a894cdfba645a22dfe95",
     "crds/secretgenerator.mittwald.de_stringsecrets_crd.yaml": "sha256:58b0ec00d2802a180a39722e196aaf2accaaccbec7513b06cd2703786c2e8843"
   }
 }

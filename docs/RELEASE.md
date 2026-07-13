@@ -1,13 +1,13 @@
-# v4.0.0-rc.11 release process
+# v4.0.0-rc.12 release process
 
-`v4.0.0-rc.11` is a candidate, not an SLA or capacity claim. Promotion is a manual,
+`v4.0.0-rc.12` is a candidate, not an SLA or capacity claim. Promotion is a manual,
 maintainer-owned decision recorded in a GitHub issue and protected by the repository's
 GitHub Environment.
 
 ## Candidate build
 
-1. Prepare the annotated `v4.0.0-rc.11` tag from the intended source commit, without pushing
-   it yet. Confirm `Chart.yaml` version/appVersion and `values.yaml` image tag match rc.11.
+1. Prepare the annotated `v4.0.0-rc.12` tag from the intended source commit, without pushing
+   it yet. Confirm `Chart.yaml` version/appVersion and `values.yaml` image tag match rc.12.
 2. Open the GitHub release issue with owner, rollback contact, target cluster inventory,
    links to [migration](MIGRATION-v4.md), [backup/restore](BACKUP-RESTORE.md),
    [rollback](ROLLBACK.md), and [support status](SUPPORT.md), plus a checklist item for a

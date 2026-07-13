@@ -244,6 +244,8 @@ fi
 crd_count=0
 legacy_crd_count=0
 adopt_legacy_crds=false
+orphaned_flux_adoption=false
+legacy_owner_kind=
 for crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
 	crd_state=$(kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" --ignore-not-found \
 		-o jsonpath='{.metadata.uid}{"|"}{.metadata.annotations.secretgenerator\.mittwald\.de/schema-release}')
@@ -292,7 +294,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 		expected_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
 		live_crd=$legacy_live_dir/$crd.json
 		kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" --show-managed-fields=true -o json >"$live_crd"
-		if ! jq -e '(.metadata.managedFields // []) as $fields |
+		if jq -e '(.metadata.managedFields // []) as $fields |
 			($fields | length) == 2 and
 			any($fields[]; .manager == "kubectl-client-side-apply" and .operation == "Update" and
 				.apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and
@@ -300,6 +302,32 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and
 				.apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and
 				(.fieldsV1 | keys) == ["f:status"])' "$live_crd" >/dev/null; then
+			[ -z "$legacy_owner_kind" ] || [ "$legacy_owner_kind" = client-apply ] || fail 'legacy CRDs have mixed ownership histories'
+			legacy_owner_kind=client-apply
+		elif [ -n "${CONFIRM_ORPHANED_FLUX_OWNER:-}" ]; then
+			case "$CONFIRM_ORPHANED_FLUX_OWNER" in
+				*/*/*|/*|*/|'') fail 'CONFIRM_ORPHANED_FLUX_OWNER must exactly equal owner-name/owner-namespace' ;;
+			esac
+			flux_owner_name=${CONFIRM_ORPHANED_FLUX_OWNER%%/*}
+			flux_owner_namespace=${CONFIRM_ORPHANED_FLUX_OWNER#*/}
+			jq -e --arg name "$flux_owner_name" --arg namespace "$flux_owner_namespace" '(.metadata.managedFields // []) as $fields |
+				($fields | length) == 2 and
+				.metadata.labels["kustomize.toolkit.fluxcd.io/name"] == $name and
+				.metadata.labels["kustomize.toolkit.fluxcd.io/namespace"] == $namespace and
+				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and
+					.apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and
+					(.fieldsV1 | has("f:spec")) and ((.fieldsV1 | keys) - ["f:metadata","f:spec"] | length) == 0) and
+				any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and
+					.apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and
+					(.fieldsV1 | keys) == ["f:status"])' "$live_crd" >/dev/null || {
+				printf 'error: %s managedFields or orphaned Flux owner labels are not the exact allowed set:\n' "$crd" >&2
+				jq -c '[.metadata.managedFields[]? | {manager,operation,apiVersion,subresource:(.subresource // ""),fieldPaths:([(.fieldsV1 // {}) | paths | map(tostring) | join(".")] | sort)}]' "$live_crd" >&2
+				fail 'refusing direct CRD ownership takeover'
+			}
+			[ -z "$legacy_owner_kind" ] || [ "$legacy_owner_kind" = orphaned-flux ] || fail 'legacy CRDs have mixed ownership histories'
+			legacy_owner_kind=orphaned-flux
+			orphaned_flux_adoption=true
+		else
 			printf 'error: %s managedFields tuples are not the exact v3 client-apply plus Kubernetes status set:\n' "$crd" >&2
 			jq -c '[.metadata.managedFields[]? | {manager,operation,apiVersion,subresource:(.subresource // ""),fieldPaths:([(.fieldsV1 // {}) | paths | map(tostring) | join(".")] | sort)}]' "$live_crd" >&2
 			fail 'refusing direct CRD ownership takeover'
@@ -310,6 +338,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 			openssl dgst -sha256 -r | awk '{print $1}')
 		[ "$actual_spec_sha" = "$expected_spec_sha" ] || fail "$crd is unmarked but does not match the pinned v3.4.1 CRD spec"
 	done
+	[ -z "${CONFIRM_ORPHANED_FLUX_OWNER:-}" ] || [ "$orphaned_flux_adoption" = true ] || fail 'CONFIRM_ORPHANED_FLUX_OWNER is only valid for exact orphaned Flux ownership'
 	adopt_legacy_crds=true
 fi
 
@@ -363,6 +392,15 @@ if [ "$adopt_legacy_crds" = true ]; then
 		SCOPE_NAMESPACES="${SCOPE_NAMESPACES:-}" CONFIRMED_NAMESPACES_SHA256="${CONFIRMED_NAMESPACES_SHA256:-}" \
 		"$repo_root/scripts/preflight-v4.sh" >"$current_preflight" || fail 'immediate legacy-adoption preflight reported blockers or an unstable snapshot'
 	[ "$(jq -r '.blockerCount' "$current_preflight")" -eq 0 ] || fail 'immediate legacy-adoption preflight reported blockers'
+	if [ "$orphaned_flux_adoption" = true ]; then
+		flux_crds=$tmpdir/flux-crds.json
+		flux_deployments=$tmpdir/flux-deployments.json
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get customresourcedefinitions.apiextensions.k8s.io -o json >"$flux_crds"
+		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployments.apps --all-namespaces -o json >"$flux_deployments"
+		jq -e '[.items[]? | select(.metadata.name | endswith(".toolkit.fluxcd.io"))] | length == 0' "$flux_crds" >/dev/null &&
+			jq -e '[.items[]? | select(.metadata.name as $name | ["source-controller","kustomize-controller","helm-controller","notification-controller","image-reflector-controller","image-automation-controller"] | index($name))] | length == 0' "$flux_deployments" >/dev/null ||
+			fail 'active Flux API or controller detected; refusing orphaned ownership adoption'
+	fi
 	for crd_file in "$chart_dir"/crds/*_crd.yaml; do
 		crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
 		live_crd=$legacy_live_dir/$crd.json
