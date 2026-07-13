@@ -115,8 +115,18 @@ has "$root/scripts/helm-release.sh" 'replace --dry-run=server --field-manager ku
 has "$root/scripts/helm-release.sh" 'replace --field-manager kubernetes-secret-generator-crd-manager'
 identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$root/scripts/helm-release.sh" | cut -d: -f1)
 preflight_line=$(grep -n -F 'current_preflight=$tmpdir/current-preflight.json' "$root/scripts/helm-release.sh" | cut -d: -f1)
-replace_line=$(grep -n -F 'replace --field-manager kubernetes-secret-generator-crd-manager' "$root/scripts/helm-release.sh" | cut -d: -f1)
-[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$replace_line" ] || fail 'legacy CRD replacement is not ordered after exact identity and immediate preflight'
+prewrite_dry_run_line=$(grep -n -F 'adoption_failed pre-write-server-dry-run' "$root/scripts/helm-release.sh" | cut -d: -f1)
+replace_lines=$(grep -n -F 'replace --field-manager kubernetes-secret-generator-crd-manager' "$root/scripts/helm-release.sh" | cut -d: -f1)
+[ "$(printf '%s\n' "$identity_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'exact legacy identity gate must occur once'
+[ "$(printf '%s\n' "$preflight_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'immediate preflight gate must occur once'
+[ "$(printf '%s\n' "$prewrite_dry_run_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'all-target pre-write dry-run gate must occur once'
+for replace_line in $replace_lines; do
+	[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$prewrite_dry_run_line" ] && [ "$prewrite_dry_run_line" -lt "$replace_line" ] ||
+		fail "legacy CRD replacement at line $replace_line is not ordered after exact identity, immediate preflight, and all-target dry-run"
+done
+retry_dry_run_line=$(grep -n -F 'adoption_failed retry-server-dry-run' "$root/scripts/helm-release.sh" | cut -d: -f1)
+retry_replace_line=$(grep -n -F 'adoption_failed retry-replace' "$root/scripts/helm-release.sh" | cut -d: -f1)
+[ "$retry_dry_run_line" -lt "$retry_replace_line" ] || fail 'retry replacement is not ordered after refreshed target server dry-run'
 for path in "$promote" "$root/scripts/helm-release.sh"; do
 	! grep -F -q -- '--force-conflicts' "$path" || fail '--force-conflicts is forbidden in release mutation paths'
 done
