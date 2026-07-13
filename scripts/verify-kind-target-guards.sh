@@ -85,6 +85,18 @@ grep -F -q 'jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"' "$releas
 grep -F -q "manager rollback changed managed fixture identity or ownership" "$release" || fail 'release smoke fixture rollback assertion is missing'
 ! grep -F -q 'manager rollback changed object counts' "$release" || fail 'release smoke still counts unrelated namespace objects'
 
+legacy_ssh_fixture=$(awk '
+	$0 == "kind: SSHKeyPair" { found=1 }
+	found && $0 == "---" { exit }
+	found { print }
+' "$release")
+printf '%s\n' "$legacy_ssh_fixture" | grep -F -q 'spec: {length: "2048"}' || fail 'legacy SSH fixture does not exercise the original v3 length field'
+for v4_field in algorithm privateKeyField publicKeyField rotationInterval; do
+	if printf '%s\n' "$legacy_ssh_fixture" | grep -E "(^|[,{[:space:]])${v4_field}:" >/dev/null; then
+		fail "legacy SSH fixture uses v4-only field $v4_field"
+	fi
+done
+
 inventory() { jq -cS -f "$inventory_filter"; }
 baseline=$(inventory <<'EOF'
 {"items":[
