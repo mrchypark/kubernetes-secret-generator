@@ -243,8 +243,50 @@ assert_owners() {
 }
 assert_owners
 
-controller_pod_count() {
+controller_pod_object_count() {
 	k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq '.items | length'
+}
+
+controller_pod_snapshot() {
+	expected_deployment_uid=$1
+	k -n "$namespace" get pods,replicasets.apps -l app.kubernetes.io/instance="$release" -o json |
+		jq -cS --arg deploymentName "$deployment" --arg deploymentUID "$expected_deployment_uid" '
+			([.items[] | select(.kind == "ReplicaSet") |
+				(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $controllers |
+				{key:.metadata.uid,value:{found:true,name:.metadata.name,uid:.metadata.uid,controllers:$controllers}}] | from_entries) as $replicaSets |
+			[.items[] | select(.kind == "Pod") |
+				(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $podControllers |
+				($replicaSets[($podControllers[0].uid // "")] // {found:false,name:"",uid:"",controllers:[]}) as $replicaSet |
+				{uid:.metadata.uid,name:.metadata.name,phase:(.status.phase // "Unknown"),
+				 deletionTimestamp:(.metadata.deletionTimestamp // null),
+				 ready:any(.status.conditions[]?; .type == "Ready" and .status == "True"),
+				 owner:{podControllerCount:($podControllers | length),podController:($podControllers[0] // {}),
+					replicaSet:{found:$replicaSet.found,name:$replicaSet.name,uid:$replicaSet.uid,
+						controllerCount:($replicaSet.controllers | length),controller:($replicaSet.controllers[0] // {})}}}] |
+			sort_by(.uid)'
+}
+
+active_controller_pods() {
+	expected_deployment_uid=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.metadata.uid}')
+	[ -n "$expected_deployment_uid" ] || fail 'controller Deployment UID is empty'
+	controller_pod_snapshot "$expected_deployment_uid" | jq -c --arg deploymentName "$deployment" --arg deploymentUID "$expected_deployment_uid" '
+		[.[] | select(
+			(.phase != "Succeeded" and .phase != "Failed") and
+			.owner.podControllerCount == 1 and
+			.owner.podController.kind == "ReplicaSet" and
+			.owner.replicaSet.found == true and
+			.owner.replicaSet.name == .owner.podController.name and
+			.owner.replicaSet.uid == .owner.podController.uid and
+			.owner.replicaSet.controllerCount == 1 and
+			.owner.replicaSet.controller.kind == "Deployment" and
+			.owner.replicaSet.controller.name == $deploymentName and
+			.owner.replicaSet.controller.uid == $deploymentUID)]'
+}
+
+active_controller_pod_count() { active_controller_pods | jq 'length'; }
+
+single_active_controller_pod() {
+	active_controller_pods | jq -ec 'if length == 1 then .[0] else error("expected exactly one active controller Pod") end'
 }
 
 stopped_pod_uids=
@@ -253,19 +295,21 @@ stop_controller() {
 	k -n "$namespace" scale deployment "$deployment" --replicas=0 >/dev/null
 	i=0
 	while [ "$i" -lt 60 ]; do
-		[ "$(controller_pod_count)" -eq 0 ] && break
+		[ "$(controller_pod_object_count)" -eq 0 ] && break
 		sleep 1
 		i=$((i + 1))
 	done
-	[ "$(controller_pod_count)" -eq 0 ] || fail 'old controller Pod did not disappear before offline replacement'
+	[ "$(controller_pod_object_count)" -eq 0 ] || fail 'old controller Pod did not disappear before offline replacement'
 	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.replicas}')" = 0 ] || fail 'controller Deployment was not scaled to zero'
 }
 
 assert_single_controller() {
-	count=$(controller_pod_count)
-	[ "$count" -le 1 ] || fail 'more than one active controller Pod was observed'
-	[ "$count" -eq 1 ] || fail 'controller Pod is missing'
-	new_uid=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o jsonpath='{.items[0].metadata.uid}')
+	active_controllers=$(active_controller_pods)
+	count=$(printf '%s\n' "$active_controllers" | jq 'length')
+	[ "$count" -le 1 ] || fail 'more than one exact controller Deployment-owned active Pod was observed'
+	[ "$count" -eq 1 ] || fail 'active controller Pod is missing'
+	new_uid=$(printf '%s\n' "$active_controllers" | jq -er '.[0].uid')
+	active_controller_name=$(printf '%s\n' "$active_controllers" | jq -er '.[0].name')
 	if [ -n "$stopped_pod_uids" ] && printf '%s\n' "$stopped_pod_uids" | grep -F -x -q "$new_uid"; then
 		fail 'old controller Pod survived the offline replacement'
 	fi
@@ -292,7 +336,7 @@ else
 fi
 grep -F -x -q -- '- Blockers: **0**' "$preflight_report" || fail 'read-only v4 preflight reported blockers'
 
-[ "$(controller_pod_count)" -eq 1 ] || fail 'expected exactly one legacy controller Pod before migration'
+[ "$(active_controller_pod_count)" -eq 1 ] || fail 'expected exactly one active legacy controller Pod before migration'
 stop_controller
 
 # A v3.4.1 client-side apply owns the CRD version list. Take over only after
@@ -356,7 +400,7 @@ upgrade_v4_manager() {
 	local_image=$1
 	image_repository=${local_image%:*}
 	image_tag=${local_image##*:}
-	[ "$(controller_pod_count)" -eq 0 ] || fail 'v4 upgrade requires the previous controller Pod to be absent'
+	[ "$(controller_pod_object_count)" -eq 0 ] || fail 'v4 upgrade requires the previous controller Pod to be absent'
 	helm upgrade "$release" "$CHART_TGZ" --kubeconfig "$kubeconfig" --kube-context "$context" \
 		--namespace "$namespace" --skip-crds --reset-values \
 		--set profile=dev --set scope.mode=ownNamespace \
@@ -373,7 +417,7 @@ upgrade_v4_manager() {
 }
 
 rollback_v3_manager() {
-	[ "$(controller_pod_count)" -eq 0 ] || fail 'v3 rollback requires the v4 controller Pod to be absent'
+	[ "$(controller_pod_object_count)" -eq 0 ] || fail 'v3 rollback requires the v4 controller Pod to be absent'
 	helm upgrade "$release" "$v3_runtime_tree/deploy/helm-chart/kubernetes-secret-generator" \
 		--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace" \
 		--skip-crds --reset-values --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
@@ -385,7 +429,8 @@ rollback_v3_manager() {
 }
 
 observe_v4_recreate_upgrade() {
-	old_v4_uid=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq -er 'if (.items | length) == 1 then .items[0].metadata.uid else error("expected one old Pod") end')
+	old_v4_controller=$(single_active_controller_pod) || fail 'expected exactly one active old v4 controller Pod'
+	old_v4_uid=$(printf '%s\n' "$old_v4_controller" | jq -er '.uid')
 	[ -n "$old_v4_uid" ] || fail 'recorded v4 Pod UID is empty before Recreate upgrade'
 	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.strategy.type}')" = Recreate ] || fail 'v4-to-v4 upgrade requires the public Recreate Deployment'
 	deployment_uid=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.metadata.uid}')
@@ -405,21 +450,7 @@ observe_v4_recreate_upgrade() {
 	mkfifo "$recreate_fifo"
 	(
 		while :; do
-			k -n "$namespace" get pods,replicasets.apps -l app.kubernetes.io/instance="$release" -o json |
-				jq -cS '
-					([.items[] | select(.kind == "ReplicaSet") |
-						(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $controllers |
-						{key:.metadata.uid,value:{found:true,name:.metadata.name,uid:.metadata.uid,controllers:$controllers}}] | from_entries) as $replicaSets |
-					[.items[] | select(.kind == "Pod") |
-						(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $podControllers |
-						($replicaSets[($podControllers[0].uid // "")] // {found:false,name:"",uid:"",controllers:[]}) as $replicaSet |
-						{uid:.metadata.uid,name:.metadata.name,phase:(.status.phase // "Unknown"),
-						 deletionTimestamp:(.metadata.deletionTimestamp // null),
-						 ready:any(.status.conditions[]?; .type == "Ready" and .status == "True"),
-						 owner:{podControllerCount:($podControllers | length),podController:($podControllers[0] // {}),
-							replicaSet:{found:$replicaSet.found,name:$replicaSet.name,uid:$replicaSet.uid,
-								controllerCount:($replicaSet.controllers | length),controller:($replicaSet.controllers[0] // {})}}}] |
-					sort_by(.uid)'
+			controller_pod_snapshot "$deployment_uid"
 			[ ! -e "$recreate_stop" ] || break
 			sleep 0.1
 		done
@@ -446,8 +477,8 @@ observe_v4_recreate_upgrade() {
 		recreate_observer_pid=
 		fail 'public v4 Recreate upgrade failed'
 	fi
-	new_v4_pod=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json |
-		jq -er 'if (.items | length) == 1 then .items[0].metadata.name else error("expected one replacement Pod") end')
+	new_v4_controller=$(single_active_controller_pod) || fail 'expected exactly one active replacement v4 controller Pod'
+	new_v4_pod=$(printf '%s\n' "$new_v4_controller" | jq -er '.name')
 	k -n "$namespace" wait --for=condition=Ready --timeout=60s "pod/$new_v4_pod" >/dev/null
 	: >"$recreate_stop"
 	producer_status=0
@@ -459,7 +490,7 @@ observe_v4_recreate_upgrade() {
 	fi
 	recreate_observer_pid=
 	[ "$producer_status" -eq 0 ] || fail 'Recreate observation producer ended before the intentional stop handshake'
-	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxActiveControllers <= 1 and .terminalOverlapSamples >= 0 and .zeroObserved == true and .oldUID == $old and .newUID != $old and .order == ["old-active","zero-active","new-active-ready"]' \
+	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxActiveControllers <= 1 and .terminalOverlapSamples >= 0 and .oldUID == $old and .newUID != $old and ((.explicitZeroObserved == true and .terminalHandoffObserved == false and .inferredZero == false and .order == ["old-active","zero-active","new-active-ready"]) or (.explicitZeroObserved == false and .terminalHandoffObserved == true and .inferredZero == true and .order == ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]))' \
 		"$recreate_summary" >/dev/null || fail 'Recreate observation summary is incomplete'
 	assert_single_controller
 	[ "$(secret_hash smoke-string):$(secret_hash smoke-basic):$(secret_hash smoke-ssh):$(secret_hash smoke-annotation)" = "$recreate_secret_fingerprints" ] ||
@@ -473,9 +504,9 @@ assert_controller_health() {
 	desired=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.replicas}')
 	ready=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.status.readyReplicas}')
 	[ "$ready" = "$desired" ] || fail 'controller is not fully Ready'
-	restarts=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq '[.items[].status.containerStatuses[]?.restartCount] | add // 0')
+	restarts=$(k -n "$namespace" get pod "$active_controller_name" -o json | jq '[.status.containerStatuses[]?.restartCount] | add // 0')
 	[ "$restarts" -eq 0 ] || fail 'controller restarted during release smoke'
-	if k -n "$namespace" logs -l app.kubernetes.io/instance="$release" --all-containers --prefix 2>&1 | grep -E 'panic:|fatal error:|OOMKilled' >/dev/null; then fail 'controller logs contain panic/fatal/OOM'; fi
+	if k -n "$namespace" logs "pod/$active_controller_name" --all-containers --prefix 2>&1 | grep -E 'panic:|fatal error:|OOMKilled' >/dev/null; then fail 'controller logs contain panic/fatal/OOM'; fi
 }
 
 assert_recovery_state() {

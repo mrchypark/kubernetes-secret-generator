@@ -45,11 +45,13 @@ review warnings for stale keys or labels and record the disposition without copy
 - On amd64, run the complete disposable-cluster smoke for at least 10 and at most 15
   minutes. It checks Ready state, restart/fatal errors, owner conflicts, unexpected
   rotations, and basic create/reconcile behavior throughout its candidate phases. Each
-  v3/v4 transition must observe Pod zero before replacement and never more than one active
-  controller Pod. It also performs a real v4-to-v4 public-chart upgrade that changes only
-  the Pod template termination grace period. An observer with a 100 ms polling delay requires
-  the old Pod UID, Pod zero, and then one different Ready UID in that order while Secret and
-  rotation state fingerprints remain unchanged.
+  offline v3/v4 transition requires zero matching Pod objects before replacement. It also
+  performs a real v4-to-v4 public-chart upgrade that changes only the Pod template termination
+  grace period and never permits more than one non-terminal Pod with the exact
+  Pod-to-ReplicaSet-to-Deployment owner chain. The 100 ms observer records either an explicit
+  zero-active sample or a direct terminal-old/new-active handoff. The latter is reported as an
+  inferred zero, never as a separately sampled zero. One different Ready UID must follow while
+  Secret and rotation state fingerprints remain unchanged.
 - Build the arm64 image and run its startup path, for example
   `docker run --rm --platform linux/arm64 IMAGE@DIGEST --help`. This is a build/startup
   check, not real-arm64 production certification.

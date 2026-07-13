@@ -53,10 +53,25 @@ run() {
 
 run valid-terminal-overlap true "$old_only" "$old_terminal_only" "$terminal_new_pending" "$terminal_new_ready"
 jq -e '.samples == 4 and .maxActiveControllers == 1 and .terminalOverlapSamples == 2 and
-	.zeroObserved == true and .oldUID == "old" and .newUID == "new" and
+	.explicitZeroObserved == true and .terminalHandoffObserved == false and .inferredZero == false and
+	.oldUID == "old" and .newUID == "new" and
 	.order == ["old-active","zero-active","new-active-ready"]' "$tmpdir/valid-terminal-overlap.json" >/dev/null
 [ -f "$tmpdir/valid-terminal-overlap.ready" ] || {
 	printf '%s\n' 'error: valid observation did not signal readiness' >&2
+	exit 2
+}
+
+run valid-direct-terminal-handoff true "$old_only" "$terminal_new_pending" "$terminal_new_ready"
+jq -e '.samples == 3 and .maxActiveControllers == 1 and .terminalOverlapSamples == 2 and
+	.explicitZeroObserved == false and .terminalHandoffObserved == true and .inferredZero == true and
+	.oldUID == "old" and .newUID == "new" and
+	.order == ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]' "$tmpdir/valid-direct-terminal-handoff.json" >/dev/null
+[ -f "$tmpdir/valid-direct-terminal-handoff.ready" ] || {
+	printf '%s\n' 'error: direct terminal handoff did not signal readiness' >&2
+	exit 2
+}
+[ ! -e "$tmpdir/valid-direct-terminal-handoff-diagnostic.json" ] || {
+	printf '%s\n' 'error: direct terminal handoff wrote a failure diagnostic' >&2
 	exit 2
 }
 [ ! -e "$tmpdir/valid-terminal-overlap-diagnostic.json" ] || {

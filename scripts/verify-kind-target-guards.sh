@@ -80,9 +80,10 @@ for contract in \
 	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
 	'replace --field-manager=kubernetes-secret-generator-crd-manager' \
 	'old controller Pod did not disappear before offline replacement' \
+	'controller_pod_object_count' \
 	'v4 upgrade requires the previous controller Pod to be absent' \
 	'v3 rollback requires the v4 controller Pod to be absent' \
-	'more than one active controller Pod was observed' \
+	'more than one exact controller Deployment-owned active Pod was observed' \
 	'.spec.strategy.type' \
 	'.metadata.ownerReferences[0].blockOwnerDeletion == true' \
 	'BasicAuth self-heal did not rotate credentials' \
@@ -94,6 +95,7 @@ for contract in \
 	'get pods,replicasets.apps -l app.kubernetes.io/instance="$release" -o json' \
 	'podControllerCount:($podControllers | length)' \
 	'controllerCount:($replicaSet.controllers | length)' \
+	'single_active_controller_pod' \
 	'OLD_UID="$old_v4_uid" DEPLOYMENT_NAME="$deployment" DEPLOYMENT_UID="$deployment_uid"' \
 	'READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" DIAGNOSTIC_FILE="$recreate_diagnostic" STOP_FILE="$recreate_stop"' \
 	'"$repo_root/test/e2e/recreate-observer.sh" <"$recreate_fifo" &' \
@@ -113,6 +115,7 @@ grep -F -q 'reject pending-overlap true' "$recreate_observer_test" || fail 'Pend
 grep -F -q 'reject unknown-overlap true' "$recreate_observer_test" || fail 'Unknown overlap negative fixture is missing'
 grep -F -q 'reject wrong-pod-owner true' "$recreate_observer_test" || fail 'wrong Pod owner negative fixture is missing'
 grep -F -q 'reject wrong-deployment-owner true' "$recreate_observer_test" || fail 'wrong Deployment owner negative fixture is missing'
+grep -F -q 'run valid-direct-terminal-handoff true' "$recreate_observer_test" || fail 'direct terminal handoff valid fixture is missing'
 "$recreate_observer_test"
 
 producer_line=$(grep -n -F 'recreate_producer_pid=$!' "$release" | cut -d: -f1)

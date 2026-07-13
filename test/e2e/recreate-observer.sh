@@ -27,7 +27,9 @@ new_uid=
 samples=0
 max_active_controllers=0
 terminal_overlap_samples=0
-zero_observed=false
+explicit_zero_observed=false
+terminal_handoff_observed=false
+inferred_zero=false
 
 while IFS= read -r raw_snapshot; do
 	if ! snapshot=$(printf '%s\n' "$raw_snapshot" | jq -ceS '
@@ -82,6 +84,7 @@ while IFS= read -r raw_snapshot; do
 	fi
 	active_uid=$(printf '%s\n' "$active" | jq -r 'first.uid // ""')
 	active_ready=$(printf '%s\n' "$active" | jq -r 'first.ready // false')
+	old_terminal=$(printf '%s\n' "$snapshot" | jq -r --arg old "$old_uid" 'any(.[]; .uid == $old and (.phase == "Succeeded" or .phase == "Failed"))')
 
 	case "$state:$active_count" in
 		initial:1)
@@ -90,8 +93,19 @@ while IFS= read -r raw_snapshot; do
 			: >"$ready_file"
 			;;
 		initial:0) fail 'the first observation did not contain the recorded old active Pod UID' ;;
-		old:1) [ "$active_uid" = "$old_uid" ] || fail 'a replacement Pod became active before Pod zero' ;;
-		old:0) state=zero; zero_observed=true ;;
+		old:1)
+			if [ "$active_uid" = "$old_uid" ]; then
+				:
+			elif [ "$old_terminal" = true ]; then
+				new_uid=$active_uid
+				terminal_handoff_observed=true
+				inferred_zero=true
+				if [ "$active_ready" = true ]; then state=new; else state=starting; fi
+			else
+				fail 'a replacement Pod became active before an explicit zero sample or terminal old-Pod handoff'
+			fi
+			;;
+		old:0) state=zero; explicit_zero_observed=true ;;
 		zero:0) : ;;
 		zero:1)
 			[ "$active_uid" != "$old_uid" ] || fail 'the old Pod UID became active again after Pod zero'
@@ -116,5 +130,9 @@ done
 [ "$state" = new ] || fail 'observation ended before a replacement active Pod became Ready'
 jq -cn --arg old "$old_uid" --arg new "$new_uid" --argjson samples "$samples" \
 	--argjson maxActiveControllers "$max_active_controllers" --argjson terminalOverlapSamples "$terminal_overlap_samples" \
-	--argjson zeroObserved "$zero_observed" \
-	'{samples:$samples,maxActiveControllers:$maxActiveControllers,terminalOverlapSamples:$terminalOverlapSamples,zeroObserved:$zeroObserved,oldUID:$old,newUID:$new,order:["old-active","zero-active","new-active-ready"]}' >"$summary_file"
+	--argjson explicitZeroObserved "$explicit_zero_observed" --argjson terminalHandoffObserved "$terminal_handoff_observed" \
+	--argjson inferredZero "$inferred_zero" '
+	{samples:$samples,maxActiveControllers:$maxActiveControllers,terminalOverlapSamples:$terminalOverlapSamples,
+	 explicitZeroObserved:$explicitZeroObserved,terminalHandoffObserved:$terminalHandoffObserved,inferredZero:$inferredZero,
+	 oldUID:$old,newUID:$new,
+	 order:(if $explicitZeroObserved then ["old-active","zero-active","new-active-ready"] else ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"] end)}' >"$summary_file"
