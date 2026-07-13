@@ -376,7 +376,8 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and
 					.apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and
 					(.fieldsV1 | keys) == ["f:metadata","f:spec"] and
-					.fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) and
+					((.fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) or
+					 (.fieldsV1["f:metadata"] == {"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}))) and
 				any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and
 					.apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and
 					(.fieldsV1 | keys) == ["f:status"])' "$live_crd" >/dev/null || {
@@ -537,7 +538,9 @@ if [ "$adopt_legacy_crds" = true ]; then
 		if [ "$orphaned_flux_adoption" = true ] && [ "$current_spec_sha" = "$original_spec_sha" ] &&
 			jq -e --arg name "$flux_owner_name" --arg namespace "$flux_owner_namespace" '(.metadata.managedFields // []) as $fields |
 				($fields | length) == 2 and .metadata.labels["kustomize.toolkit.fluxcd.io/name"] == $name and .metadata.labels["kustomize.toolkit.fluxcd.io/namespace"] == $namespace and
-				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and .apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and (.fieldsV1 | keys) == ["f:metadata","f:spec"] and .fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) and
+				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and .apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and (.fieldsV1 | keys) == ["f:metadata","f:spec"] and
+					((.fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) or
+					 (.fieldsV1["f:metadata"] == {"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}))) and
 				any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and .apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and (.fieldsV1 | keys) == ["f:status"])' "$retry_live" >/dev/null; then
 			current_rv=$(jq -er '.metadata.resourceVersion' "$retry_live")
 			jq --arg rv "$current_rv" '.metadata.resourceVersion=$rv' "$target_crd" >"$tmpdir/refreshed-$crd.json"

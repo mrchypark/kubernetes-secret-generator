@@ -39,7 +39,7 @@ case "$1" in
 	template) check_approval_values "$@"; printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.14.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.15.tgz"; break; fi
 			shift
 		done
 		;;
@@ -121,14 +121,21 @@ JSON
 			rv=11
 			[ "${MOCK_RETRY_SPEC_CHANGED:-false}" != true ] || hash=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 		fi
+		uid=uid-1
+		if [ "${MOCK_RETRY_UID_CHANGED:-false}" = true ] && [ "$rv" = 11 ]; then uid=uid-2; fi
 		printf '%s' "$hash" >"$MOCK_SPEC_HASH"
 		extra=
 		[ "${MOCK_EXTRA_MANAGER:-false}" != true ] || extra=',{"manager":"unknown-reconciler","operation":"Apply","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:spec":{}}}'
 		if [ "${MOCK_RETRY_MANAGER_CHANGED:-false}" = true ] && [ "$rv" = 11 ]; then extra=',{"manager":"unknown-reconciler","operation":"Apply","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:spec":{}}}'; fi
 		metadata_fields='{"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}'
-		[ "${MOCK_EXTRA_METADATA:-false}" != true ] || metadata_fields='{"f:annotations":{"f:other":{}},"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}'
-		printf '{"metadata":{"uid":"uid-1","resourceVersion":"%s","labels":{"kustomize.toolkit.fluxcd.io/name":"%s","kustomize.toolkit.fluxcd.io/namespace":"%s"},"managedFields":[{"manager":"kube-apiserver","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","subresource":"status","fieldsV1":{"%s":{}}},{"manager":"%s","operation":"%s","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:metadata":%s,"f:spec":{}}}%s]},"spec":{}}' \
-			"$rv" "${MOCK_OWNER_NAME:-dev-infra-stable}" "${MOCK_OWNER_NAMESPACE:-gitops}" "${MOCK_STATUS_FIELD:-f:status}" \
+		[ "${MOCK_OMIT_LABEL_SET_MARKER:-false}" != true ] || metadata_fields='{"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}'
+		[ "${MOCK_MISSING_OWNER_LEAF:-false}" != true ] || metadata_fields='{"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{}}}'
+		[ "${MOCK_EXTRA_LABEL:-false}" != true ] || metadata_fields='{"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{},"f:other":{}}}'
+		[ "${MOCK_DOT_ONLY_LABELS:-false}" != true ] || metadata_fields='{"f:labels":{".":{}}}'
+		[ "${MOCK_EXTRA_METADATA:-false}" != true ] || metadata_fields='{"f:annotations":{"f:other":{}},"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}'
+		[ "${MOCK_FINALIZER_METADATA:-false}" != true ] || metadata_fields='{"f:finalizers":{".":{},"v:\"other.example.invalid\"":{}},"f:labels":{"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}'
+		printf '{"metadata":{"uid":"%s","resourceVersion":"%s","labels":{"kustomize.toolkit.fluxcd.io/name":"%s","kustomize.toolkit.fluxcd.io/namespace":"%s"},"managedFields":[{"manager":"kube-apiserver","operation":"Update","apiVersion":"apiextensions.k8s.io/v1","subresource":"status","fieldsV1":{"%s":{}}},{"manager":"%s","operation":"%s","apiVersion":"apiextensions.k8s.io/v1","fieldsV1":{"f:metadata":%s,"f:spec":{}}}%s]},"spec":{}}' \
+			"$uid" "$rv" "${MOCK_OWNER_NAME:-dev-infra-stable}" "${MOCK_OWNER_NAMESPACE:-gitops}" "${MOCK_STATUS_FIELD:-f:status}" \
 			"${MOCK_FIELD_MANAGER:-kubectl-client-side-apply}" "${MOCK_FIELD_OPERATION:-Update}" "$metadata_fields" "$extra"
 		;;
 	*create\ --dry-run=client*)
@@ -178,7 +185,7 @@ common_env() {
 	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg DEPLOYMENT_NAME=ksg CHART_VERSION=4.0.0-rc.14 \
+		NAMESPACE=ksg-system RELEASE_NAME=ksg DEPLOYMENT_NAME=ksg CHART_VERSION=4.0.0-rc.15 \
 		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
 }
 
@@ -261,7 +268,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system|owner|flux|ksg-system|ksg|4.0.0-rc.14|ownNamespace||||\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system|owner|flux|ksg-system|ksg|4.0.0-rc.15|ownNamespace||||\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -284,13 +291,13 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.14|ownNamespace||||\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.15|ownNamespace||||\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null
 grep -F -q 'helm install ksg ' "$log" || fail 'confirmed retained-CRD reinstall did not use helm install'
 
-persisted_owner='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.14|ownNamespace||issue#23|@mrchypark|initial#22\n'
+persisted_owner='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.15|ownNamespace||issue#23|@mrchypark|initial#22\n'
 : >"$log"
 common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD="$persisted_owner" \
 	MOCK_EXPECT_APPROVAL_REF=issue#23 MOCK_EXPECT_APPROVER=@mrchypark MOCK_EXPECT_REPLACEMENT_REF=initial#22 \
@@ -488,6 +495,33 @@ for fixture in wrong-owner wrong-manager unknown-spec extra-metadata; do
 	assert_no_mutation
 done
 
+for fixture in missing-leaf extra-label dot-only annotation finalizer mixed-manager; do
+	rm -f "$tmpdir/spec-hash"
+	: >"$log"
+	case "$fixture" in
+		missing-leaf) set -- MOCK_MISSING_OWNER_LEAF=true ;;
+		extra-label) set -- MOCK_EXTRA_LABEL=true ;;
+		dot-only) set -- MOCK_DOT_ONLY_LABELS=true ;;
+		annotation) set -- MOCK_EXTRA_METADATA=true ;;
+		finalizer) set -- MOCK_FINALIZER_METADATA=true ;;
+		mixed-manager) set -- MOCK_EXTRA_MANAGER=true ;;
+	esac
+	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply MOCK_OMIT_LABEL_SET_MARKER=true "$@" \
+		EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+		CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+		CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
+		ORPHANED_FLUX_APPROVAL_REF=issue#23 ORPHANED_FLUX_APPROVER=@mrchypark CONTROLLER_STOPPED_CONFIRM=true \
+		"$repo_root/scripts/helm-release.sh" upgrade >"$tmpdir/orphaned-no-dot-$fixture.out" 2>&1; then
+		fail "orphaned Flux adoption accepted no-dot $fixture ownership"
+	fi
+	grep -F -q 'managedFields or orphaned Flux owner labels are not the exact allowed set' "$tmpdir/orphaned-no-dot-$fixture.out" || fail "no-dot $fixture omitted the safe ownership diagnostic"
+	grep -F -q '"fieldPaths"' "$tmpdir/orphaned-no-dot-$fixture.out" || fail "no-dot $fixture diagnostic omitted redacted field paths"
+	assert_no_mutation
+done
+
 for fixture in unknown-manager status-spec-owner; do
 	rm -f "$tmpdir/spec-hash"
 	: >"$log"
@@ -585,6 +619,20 @@ grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated orphaned Flux adoption 
 
 rm -f "$tmpdir/spec-hash"
 : >"$log"
+common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply MOCK_OMIT_LABEL_SET_MARKER=true \
+	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
+	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
+	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
+	CONFIRM_ORPHANED_FLUX_OWNER=dev-infra-stable/gitops \
+	CONFIRM_ORPHANED_FLUX_DECOMMISSIONED=dev-infra-stable/gitops \
+	ORPHANED_FLUX_APPROVAL_REF=issue#23 ORPHANED_FLUX_APPROVER=@mrchypark CONTROLLER_STOPPED_CONFIRM=true \
+	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null
+grep -F -q -- '--request-timeout=20s get deployments.apps --all-namespaces' "$log" || fail 'live no-dot orphaned Flux adoption did not recheck controller deployments'
+grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated live no-dot orphaned Flux adoption did not continue to manager upgrade'
+
+rm -f "$tmpdir/spec-hash"
+: >"$log"
 if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_CONFLICT=true \
 	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
 	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
@@ -602,7 +650,7 @@ if grep -F -q 'helm upgrade ksg ' "$log"; then fail 'manager rollout continued a
 rm -f "$tmpdir/spec-hash"
 : >"$log"
 common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_FAIL_AT=2 MOCK_EXPECT_RETRY_RV=true \
-	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
+	MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply MOCK_OMIT_LABEL_SET_MARKER=true \
 	EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
 	RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
@@ -615,17 +663,19 @@ if [ "$retry_replace_count" -ne 4 ]; then
 	grep -F 'replace' "$log" >&2
 	fail "second replace conflict did not revalidate and retry exactly once (replace count $retry_replace_count)"
 fi
-grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated current-RV retry did not continue to Helm'
+grep -F -q 'helm upgrade ksg ' "$log" || fail 'validated live no-dot current-RV retry did not continue to Helm'
 
-for fixture in changed-spec changed-manager; do
+for fixture in changed-uid changed-spec changed-manager; do
 	rm -f "$tmpdir/spec-hash"
 	: >"$log"
+	reason=conflict-state-unknown
 	case "$fixture" in
+		changed-uid) set -- MOCK_RETRY_UID_CHANGED=true; reason=conflict-uid-changed ;;
 		changed-spec) set -- MOCK_RETRY_SPEC_CHANGED=true ;;
 		changed-manager) set -- MOCK_RETRY_MANAGER_CHANGED=true ;;
 	esac
 	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true MOCK_REPLACE_FAIL_AT=2 "$@" \
-		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply \
+		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply MOCK_OMIT_LABEL_SET_MARKER=true \
 		EXPECTED_SERVER_URL=https://target.example.invalid EXPECTED_CA_SHA256="$ca_sha" \
 		RAW_V3_PREFLIGHT_REPORT="$preflight" RAW_V3_PREFLIGHT_SHA256="$preflight_sha" \
 		SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1 \
@@ -634,9 +684,11 @@ for fixture in changed-spec changed-manager; do
 		"$repo_root/scripts/helm-release.sh" upgrade >"$tmpdir/$fixture-retry.out" 2>&1; then
 		fail "replace conflict accepted $fixture live state"
 	fi
-	grep -F -q 'conflict-state-unknown' "$tmpdir/$fixture-retry.out" || fail "$fixture conflict omitted safe failure reason"
+	grep -F -q "$reason" "$tmpdir/$fixture-retry.out" || fail "$fixture conflict omitted safe failure reason"
 	if grep -F -q 'target-' "$tmpdir/$fixture-retry.out"; then fail "$fixture conflict printed a stale target command or path"; fi
 	if grep -F -q 'helm upgrade ksg ' "$log"; then fail "Helm ran after $fixture conflict"; fi
+	unsafe_replace_count=$(grep -F -c 'replace --field-manager kubernetes-secret-generator-crd-manager' "$log" || true)
+	[ "$unsafe_replace_count" -eq 2 ] || fail "$fixture conflict retried a CRD write before exact revalidation"
 done
 
 : >"$log"
