@@ -6,6 +6,8 @@ foundation=$repo_root/test/e2e/kind-foundation.sh
 release=$repo_root/test/e2e/release-smoke.sh
 benchmark=$repo_root/test/e2e/benchmark.sh
 inventory_filter=$repo_root/test/e2e/release-smoke-inventory.jq
+recreate_observer=$repo_root/test/e2e/recreate-observer.sh
+recreate_observer_test=$repo_root/scripts/test-recreate-observer.sh
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
 
@@ -88,6 +90,30 @@ for contract in \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+for contract in \
+	'OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary"' \
+	'"$repo_root/test/e2e/recreate-observer.sh" &' \
+	'--set terminationGracePeriodSeconds=31 --wait --timeout 180s' \
+	'wait --for=condition=Ready --timeout=60s "pod/$new_v4_pod"' \
+	'rotation state did not settle before v4-to-v4 Recreate upgrade' \
+	'v4-to-v4 Recreate upgrade rotated a credential' \
+	'v4-to-v4 Recreate upgrade changed rotation state' \
+	'--slurpfile recreate "$recreate_summary"'; do
+	grep -F -q -- "$contract" "$release" || fail "v4 Recreate observation contract is missing: $contract"
+done
+[ -x "$recreate_observer" ] || fail 'Recreate observer is not executable'
+[ -x "$recreate_observer_test" ] || fail 'Recreate observer negative-fixture test is not executable'
+"$recreate_observer_test"
+
+observer_line=$(grep -n -F '"$repo_root/test/e2e/recreate-observer.sh" &' "$release" | cut -d: -f1)
+ready_line=$(grep -n -F '[ -e "$recreate_ready" ] || fail' "$release" | cut -d: -f1)
+upgrade_line=$(grep -n -F -- '--set terminationGracePeriodSeconds=31 --wait --timeout 180s' "$release" | cut -d: -f1)
+stop_line=$(grep -n -F ': >"$recreate_stop"' "$release" | tail -n 1 | cut -d: -f1)
+wait_line=$(grep -n -F 'wait "$recreate_observer_pid"; then' "$release" | cut -d: -f1)
+summary_line=$(grep -n -F 'Recreate observation summary is incomplete' "$release" | cut -d: -f1)
+[ "$observer_line" -lt "$ready_line" ] && [ "$ready_line" -lt "$upgrade_line" ] && \
+	[ "$upgrade_line" -lt "$stop_line" ] && [ "$stop_line" -lt "$wait_line" ] && [ "$wait_line" -lt "$summary_line" ] ||
+	fail 'Recreate observer is not ordered around the live Helm upgrade'
 ! grep -F -q -- '--set installCRDs=true' "$release" || fail 'v3 runtime chart must not replace the original e159 CRD fixtures'
 grep -F -q 'jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"' "$release" || fail 'release smoke does not use the managed fixture inventory filter'
 grep -F -q "manager rollback changed managed fixture identity or ownership" "$release" || fail 'release smoke fixture rollback assertion is missing'
