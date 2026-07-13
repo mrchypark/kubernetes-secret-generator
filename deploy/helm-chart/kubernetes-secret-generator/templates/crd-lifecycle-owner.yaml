@@ -17,3 +17,4 @@ data:
   namespacesSHA256: {{ ternary (sha256sum (join "\n" (sortAlpha .Values.scope.namespaces))) "" (eq .Values.scope.mode "namespaces") | quote }}
   orphanedFluxApprovalRef: {{ .Values.migration.orphanedFluxApprovalRef | quote }}
   orphanedFluxApprover: {{ .Values.migration.orphanedFluxApprover | quote }}
+  orphanedFluxApprovalReplacementRef: {{ .Values.migration.orphanedFluxApprovalReplacementRef | quote }}

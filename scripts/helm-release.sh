@@ -142,9 +142,12 @@ leader_election_enabled=${LEADER_ELECTION_ENABLED:-true}
 leader_election_id=${LEADER_ELECTION_ID:-kubernetes-secret-generator-lock}
 orphaned_flux_approval_ref=${ORPHANED_FLUX_APPROVAL_REF:-}
 orphaned_flux_approver=${ORPHANED_FLUX_APPROVER:-}
-case "$orphaned_flux_approval_ref:$orphaned_flux_approver" in
+orphaned_flux_approval_replacement_ref=${ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF:-}
+replace_orphaned_flux_approval=${REPLACE_ORPHANED_FLUX_APPROVAL:-false}
+case "$orphaned_flux_approval_ref:$orphaned_flux_approver:$orphaned_flux_approval_replacement_ref" in
 	*[!A-Za-z0-9@._:/#-]*) fail 'orphaned Flux approval evidence contains unsupported characters' ;;
 esac
+case "$replace_orphaned_flux_approval" in true|false) ;; *) fail 'REPLACE_ORPHANED_FLUX_APPROVAL must be true or false' ;; esac
 case "$compatibility_profile" in
 	v4|v3.4.1) ;;
 	*) fail 'COMPATIBILITY_PROFILE must be v4 or v3.4.1' ;;
@@ -194,7 +197,8 @@ fi
 	else
 		printf 'migration:\n  confirmedScope: ""\n  confirmedNamespacesSHA256: ""\n'
 	fi
-	printf '  orphanedFluxApprovalRef: "%s"\n  orphanedFluxApprover: "%s"\n' "$orphaned_flux_approval_ref" "$orphaned_flux_approver"
+	printf '  orphanedFluxApprovalRef: "%s"\n  orphanedFluxApprover: "%s"\n  orphanedFluxApprovalReplacementRef: "%s"\n' \
+		"$orphaned_flux_approval_ref" "$orphaned_flux_approver" "$orphaned_flux_approval_replacement_ref"
 	printf 'crdLifecycle:\n  manager: direct\n'
 	printf 'compatibilityProfile: %s\n' "$compatibility_profile"
 	printf 'leaderElection:\n  enabled: %s\n  id: %s\n' "$leader_election_enabled" "$leader_election_id"
@@ -211,12 +215,12 @@ esac
 
 lifecycle_records=$(kubectl --context "$KUBE_CONTEXT" get configmaps --all-namespaces \
 	--selector secretgenerator.mittwald.de/crd-lifecycle-owner=true \
-	-o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.data.manager}{"\t"}{.data.releaseNamespace}{"\t"}{.data.releaseName}{"\t"}{.data.chartVersion}{"\t"}{.data.scopeMode}{"\t"}{.data.namespacesSHA256}{"\n"}{end}')
+	-o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.data.manager}{"|"}{.data.releaseNamespace}{"|"}{.data.releaseName}{"|"}{.data.chartVersion}{"|"}{.data.scopeMode}{"|"}{.data.namespacesSHA256}{"|"}{.data.orphanedFluxApprovalRef}{"|"}{.data.orphanedFluxApprover}{"|"}{.data.orphanedFluxApprovalReplacementRef}{"\n"}{end}')
 lifecycle_count=$(printf '%s\n' "$lifecycle_records" | awk 'NF { count++ } END { print count + 0 }')
 [ "$lifecycle_count" -le 1 ] || fail 'multiple CRD lifecycle owners exist; manual review is required'
 [ "$REINSTALL" = false ] || [ "$lifecycle_count" -eq 1 ] || fail 'reinstall requires exactly one retained CRD lifecycle owner record'
 if [ "$lifecycle_count" -eq 1 ]; then
-	IFS="$(printf '\t')" read -r owner_namespace owner_name lifecycle_manager lifecycle_namespace lifecycle_release lifecycle_version lifecycle_scope lifecycle_namespaces_sha <<EOF
+	IFS='|' read -r owner_namespace owner_name lifecycle_manager lifecycle_namespace lifecycle_release lifecycle_version lifecycle_scope lifecycle_namespaces_sha lifecycle_approval_ref lifecycle_approver lifecycle_approval_replacement_ref <<EOF
 $lifecycle_records
 EOF
 	[ -n "$owner_namespace" ] && [ -n "$owner_name" ] && [ -n "$lifecycle_manager" ] && [ -n "$lifecycle_namespace" ] && [ -n "$lifecycle_release" ] && [ -n "$lifecycle_version" ] && [ -n "$lifecycle_scope" ] || fail 'CRD lifecycle owner evidence is malformed'
@@ -229,7 +233,44 @@ EOF
 		[ "$SCOPE_MODE" != namespaces ] || [ "$canonical_sha" = "$lifecycle_namespaces_sha" ] || fail 'reinstall namespace set differs from retained lifecycle evidence'
 	fi
 	[ -n "$lifecycle_version" ] || fail 'CRD lifecycle owner has no chart version'
+	if { [ -z "$lifecycle_approval_ref" ] && [ -n "$lifecycle_approver" ]; } || { [ -n "$lifecycle_approval_ref" ] && [ -z "$lifecycle_approver" ]; }; then
+		fail 'retained orphaned Flux approval evidence is malformed'
+	fi
+	if [ "$replace_orphaned_flux_approval" = true ]; then
+		require ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF
+		[ "$ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF" != "$lifecycle_approval_ref" ] &&
+			[ "$ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF" != "$lifecycle_approver" ] &&
+			[ "$ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF" != "$orphaned_flux_approval_ref" ] &&
+			[ "$ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF" != "$orphaned_flux_approver" ] ||
+			fail 'orphaned Flux approval replacement requires an independent audit reference'
+		if { [ -z "$orphaned_flux_approval_ref" ] && [ -n "$orphaned_flux_approver" ]; } || { [ -n "$orphaned_flux_approval_ref" ] && [ -z "$orphaned_flux_approver" ]; }; then
+			fail 'replacement approval reference and approver must both be set or both be cleared'
+		fi
+	else
+		[ -z "$orphaned_flux_approval_replacement_ref" ] || fail 'ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF requires REPLACE_ORPHANED_FLUX_APPROVAL=true'
+		if [ -n "$lifecycle_approval_ref" ]; then
+			if [ -z "$orphaned_flux_approval_ref$orphaned_flux_approver" ]; then
+				orphaned_flux_approval_ref=$lifecycle_approval_ref
+				orphaned_flux_approver=$lifecycle_approver
+			elif [ "$orphaned_flux_approval_ref" != "$lifecycle_approval_ref" ] || [ "$orphaned_flux_approver" != "$lifecycle_approver" ]; then
+				fail 'ordinary upgrade/reinstall cannot clear or replace persisted orphaned Flux approval evidence'
+			fi
+			orphaned_flux_approval_replacement_ref=$lifecycle_approval_replacement_ref
+		elif [ -n "$orphaned_flux_approval_ref$orphaned_flux_approver" ]; then
+			fail 'adding orphaned Flux approval evidence to an existing lifecycle owner requires an audited replacement'
+		fi
+	fi
+elif [ "$replace_orphaned_flux_approval" = true ] || [ -n "$orphaned_flux_approval_replacement_ref" ]; then
+	fail 'orphaned Flux approval replacement requires existing lifecycle evidence'
 fi
+
+awk -v ref="$orphaned_flux_approval_ref" -v approver="$orphaned_flux_approver" -v replacement="$orphaned_flux_approval_replacement_ref" '
+	$1 == "orphanedFluxApprovalRef:" { print "  orphanedFluxApprovalRef: \"" ref "\""; next }
+	$1 == "orphanedFluxApprover:" { print "  orphanedFluxApprover: \"" approver "\""; next }
+	$1 == "orphanedFluxApprovalReplacementRef:" { print "  orphanedFluxApprovalReplacementRef: \"" replacement "\""; next }
+	{ print }
+' "$scope_values" >"$tmpdir/resolved-scope-values.yaml"
+mv "$tmpdir/resolved-scope-values.yaml" "$scope_values"
 
 version_is_newer() {
 	installed=${1#v}; installed=${installed%%-*}
@@ -446,9 +487,9 @@ if [ "$adopt_legacy_crds" = true ]; then
 		lease_holder=$(kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get lease "$leader_election_id" --namespace "$NAMESPACE" --ignore-not-found -o jsonpath='{.spec.holderIdentity}')
 		[ -z "$lease_holder" ] || fail 'leader Lease remains owned; clear only through the approved downtime runbook'
 	fi
-	completed_crds='|'
 	adoption_failed() {
 		preserve_tmp=true
+		rm -f "$tmpdir"/target-*.json
 		printf 'error: CRD adoption stopped at %s for %s; Helm was not invoked and the controller must remain stopped\n' "$1" "$2" >&2
 		printf 'recovery inventory (identity only):\n' >&2
 		for recovery_crd in basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de; do
@@ -456,24 +497,63 @@ if [ "$adopt_legacy_crds" = true ]; then
 				-o jsonpath='{.metadata.name}{" uid="}{.metadata.uid}{" rv="}{.metadata.resourceVersion}{" schema-release="}{.metadata.annotations.secretgenerator\.mittwald\.de/schema-release}{"\n"}' >&2 ||
 				printf '%s inventory unavailable\n' "$recovery_crd" >&2
 		done
-		printf 'review and run only these exact rc12 recovery commands while the Deployment stays at zero replicas:\n' >&2
-		for recovery_target in "$tmpdir"/target-*.json; do
-			recovery_crd=$(jq -er '.metadata.name' "$recovery_target")
-			case "$completed_crds" in *"|$recovery_crd|"*) continue ;; esac
-			printf 'kubectl --context "%s" replace --field-manager kubernetes-secret-generator-crd-manager --filename "%s"\n' "$KUBE_CONTEXT" "$recovery_target" >&2
-		done
-		printf 'kubectl --context "%s" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "%s"\n' "$KUBE_CONTEXT" "$canonical_crds" >&2
-		printf 'kubectl --context "%s" wait --for=condition=Established --timeout=60s crd/basicauths.secretgenerator.mittwald.de crd/sshkeypairs.secretgenerator.mittwald.de crd/stringsecrets.secretgenerator.mittwald.de\n' "$KUBE_CONTEXT" >&2
-		printf 'verify username=string, SSH algorithm/private/public=stringstringstring, and String fields=array using the schema checks in docs/UPGRADE.md; only then install v4 or deliberately restart v3.4.1\n' >&2
-		printf 'recovery files retained at %s\n' "$tmpdir" >&2
+		printf 'discarded all resourceVersion-bound target files; never reuse a stale replacement command\n' >&2
+		printf 'keep the controller stopped and follow docs/UPGRADE.md to refetch and revalidate every live CRD before generating any recovery request\n' >&2
+		printf 'redacted diagnostics retained at %s\n' "$tmpdir" >&2
 		exit 2
+	}
+	for target_crd in "$tmpdir"/target-*.json; do
+		crd=$(jq -er '.metadata.name' "$target_crd")
+		kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed pre-write-server-dry-run "$crd"
+	done
+	replace_with_revalidation() {
+		crd=$1
+		target_crd=$2
+		if kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null; then
+			return
+		fi
+		retry_live=$tmpdir/retry-$crd.json
+		kubectl --context "$KUBE_CONTEXT" get "customresourcedefinition/$crd" --show-managed-fields=true -o json >"$retry_live" || adoption_failed conflict-refetch "$crd"
+		original_uid=$(jq -er '.metadata.uid' "$legacy_live_dir/$crd.json")
+		current_uid=$(jq -er '.metadata.uid' "$retry_live")
+		[ "$current_uid" = "$original_uid" ] || adoption_failed conflict-uid-changed "$crd"
+		current_spec_sha=$(jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' "$retry_live" |
+			openssl dgst -sha256 -r | awk '{print $1}')
+		target_spec_sha=$(jq -Sc '.spec | if .conversion == {strategy:"None"} then del(.conversion) else . end | if .preserveUnknownFields == false then del(.preserveUnknownFields) else . end' "$target_crd" |
+			openssl dgst -sha256 -r | awk '{print $1}')
+		case "$crd" in
+			basicauths.*) lock_key=crd.v3.4.1.basicauths.spec-sha256 ;;
+			sshkeypairs.*) lock_key=crd.v3.4.1.sshkeypairs.spec-sha256 ;;
+			stringsecrets.*) lock_key=crd.v3.4.1.stringsecrets.spec-sha256 ;;
+		esac
+		original_spec_sha=$(awk -F= -v key="$lock_key" '$1 == key { print $2; found=1 } END { if (!found) exit 1 }' "$repo_root/tools.lock")
+		if [ "$current_spec_sha" = "$target_spec_sha" ] && jq -e --arg release "v${CHART_VERSION%%-*}" '(.metadata.managedFields // []) as $fields |
+			.metadata.annotations["secretgenerator.mittwald.de/schema-release"] == $release and
+			($fields | length) == 2 and
+			any($fields[]; .manager == "kubernetes-secret-generator-crd-manager" and .operation == "Update" and .apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and (.fieldsV1 | has("f:spec")) and ((.fieldsV1 | keys) - ["f:metadata","f:spec"] | length) == 0) and
+			any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and .apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and (.fieldsV1 | keys) == ["f:status"])' "$retry_live" >/dev/null; then
+			return
+		fi
+		if [ "$orphaned_flux_adoption" = true ] && [ "$current_spec_sha" = "$original_spec_sha" ] &&
+			jq -e --arg name "$flux_owner_name" --arg namespace "$flux_owner_namespace" '(.metadata.managedFields // []) as $fields |
+				($fields | length) == 2 and .metadata.labels["kustomize.toolkit.fluxcd.io/name"] == $name and .metadata.labels["kustomize.toolkit.fluxcd.io/namespace"] == $namespace and
+				any($fields[]; .manager == "kustomize-controller" and .operation == "Apply" and .apiVersion == "apiextensions.k8s.io/v1" and (.subresource // "") == "" and (.fieldsV1 | keys) == ["f:metadata","f:spec"] and .fieldsV1["f:metadata"] == {"f:labels":{".":{},"f:kustomize.toolkit.fluxcd.io/name":{},"f:kustomize.toolkit.fluxcd.io/namespace":{}}}) and
+				any($fields[]; .manager == "kube-apiserver" and .operation == "Update" and .apiVersion == "apiextensions.k8s.io/v1" and .subresource == "status" and (.fieldsV1 | keys) == ["f:status"])' "$retry_live" >/dev/null; then
+			current_rv=$(jq -er '.metadata.resourceVersion' "$retry_live")
+			jq --arg rv "$current_rv" '.metadata.resourceVersion=$rv' "$target_crd" >"$tmpdir/refreshed-$crd.json"
+			mv "$tmpdir/refreshed-$crd.json" "$target_crd"
+			kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed retry-server-dry-run "$crd"
+			kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed retry-replace "$crd"
+			return
+		fi
+		printf 'error: %s changed after replace conflict; current managedFields inventory:\n' "$crd" >&2
+		jq -c '[.metadata.managedFields[]? | {manager,operation,apiVersion,subresource:(.subresource // ""),fieldPaths:([(.fieldsV1 // {}) | paths | map(tostring) | join(".")] | sort)}]' "$retry_live" >&2
+		adoption_failed conflict-state-unknown "$crd"
 	}
 	for crd_file in "$chart_dir"/crds/*_crd.yaml; do
 		crd=$(awk '$1 == "name:" { print $2; exit }' "$crd_file")
 		target_crd=$tmpdir/target-$crd.json
-		kubectl --context "$KUBE_CONTEXT" replace --dry-run=server --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed server-dry-run "$crd"
-		kubectl --context "$KUBE_CONTEXT" replace --field-manager kubernetes-secret-generator-crd-manager --filename "$target_crd" >/dev/null || adoption_failed replace "$crd"
-		completed_crds="$completed_crds$crd|"
+		replace_with_revalidation "$crd" "$target_crd"
 		kubectl --context "$KUBE_CONTEXT" apply --server-side --field-manager kubernetes-secret-generator-crd-manager --filename "$crd_file" >/dev/null || adoption_failed server-side-apply "$crd"
 	done
 else

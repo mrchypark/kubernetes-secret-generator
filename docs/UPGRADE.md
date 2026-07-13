@@ -63,10 +63,16 @@ Pods and an absent or unowned `kubernetes-secret-generator-lock` Lease, then set
 `CONTROLLER_STOPPED_CONFIRM=true`. The wrapper rechecks all of these immediately before its
 first CRD replacement and persists the approval evidence in the lifecycle owner ConfigMap.
 
-If any dry-run, replace, or non-forcing SSA operation fails, Helm is not invoked and the
-controller must remain stopped. The command emits only CRD identity inventory and retains an
-exact rc12 recovery directory. Review and run the printed remaining UID/resourceVersion
-replacements, printed canonical-bundle SSA, and three-CRD `Established` wait. Then verify:
+All three targets pass server dry-run before the first write. If a replace conflicts, the
+wrapper refetches managedFields and UID. It retries once with the current resourceVersion only
+when the object is still the exact pinned orphan state; if the first request already produced
+the exact rc12 direct-managed state, it continues to non-forcing SSA. Any changed spec, UID,
+or manager fails closed. Helm is not invoked and the controller must remain stopped.
+
+Never reuse a printed or retained resourceVersion-bound target: the wrapper deletes these
+files on failure. Use the redacted identity/managedFields inventory to review the live state,
+then refetch and revalidate every CRD before generating a new recovery request. After all
+three CRDs converge and become `Established`, verify:
 
 ```sh
 kubectl --context "$KUBE_CONTEXT" get crd/basicauths.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.username.type}{"\n"}'
@@ -76,6 +82,13 @@ kubectl --context "$KUBE_CONTEXT" get crd/stringsecrets.secretgenerator.mittwald
 
 Expected outputs are `string`, `stringstringstring`, and `array`. Only after all three match
 may the operator install v4 or deliberately restart the v3.4.1 manager.
+
+The lifecycle owner ConfigMap preserves `orphanedFluxApprovalRef` and
+`orphanedFluxApprover` automatically on ordinary upgrade or reinstall. To replace or clear
+them, set `REPLACE_ORPHANED_FLUX_APPROVAL=true` and an independent
+`ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF`; supply both new approval fields to replace them or
+leave both unset to clear them. The replacement audit reference is persisted. Any unreviewed
+mismatch is rejected before mutation.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
 before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.12 release
