@@ -29,7 +29,7 @@ export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
 export DEPLOYMENT_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.16
+export CHART_VERSION=4.0.0-rc.17
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -94,7 +94,7 @@ leave both unset to clear them. The replacement audit reference is persisted. An
 mismatch is rejected before mutation.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
-before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.16 release
+before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.17 release
 blocker. Never switch CRD managers during the controller upgrade.
 
 ## Rollback
@@ -106,6 +106,11 @@ old values are required.
 
 v4 supports exactly one replica and one active release per non-overlapping controller scope.
 Do not attach an HPA, manually scale above one, or run multiple releases over the same objects.
+`Recreate` prevents the Deployment controller from starting a replacement while an old Pod is
+non-terminal, but it is not distributed fencing. A force-deleted Pod or a Pod on an unreachable
+node may leave its controller process running after the API object is gone. Because v4 deliberately
+has no HA or leader election, fence that node or otherwise prove the old process has stopped before
+continuing; never start an overlapping release.
 
 See [ROLLBACK.md](ROLLBACK.md) for the command checklist and [RELEASE.md](RELEASE.md) for
 manual candidate promotion.

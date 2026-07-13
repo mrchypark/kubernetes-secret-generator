@@ -17,13 +17,13 @@ sha=$(git -C "$tmp" rev-parse HEAD)
 
 run() { (cd "$tmp" && RELEASE_TAG=$1 SOURCE_COMMIT=$2 scripts/validate-release.sh); }
 
-git -C "$tmp" tag v4.0.0-rc.16
-run v4.0.0-rc.16 "$sha"
+git -C "$tmp" tag v4.0.0-rc.17
+run v4.0.0-rc.17 "$sha"
 if run v4.0 "$sha" >/dev/null 2>&1; then echo 'invalid tag accepted' >&2; exit 1; fi
-if run v4.0.0-rc.16 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1; then echo 'wrong source accepted' >&2; exit 1; fi
+if run v4.0.0-rc.17 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null 2>&1; then echo 'wrong source accepted' >&2; exit 1; fi
 
-sed -i.bak 's/^version: 4.0.0-rc.16$/version: 4.0.0/; s/^appVersion: v4.0.0-rc.16$/appVersion: v4.0.0/' "$tmp/deploy/helm-chart/kubernetes-secret-generator/Chart.yaml"
-sed -i.bak 's/tag: v4.0.0-rc.16/tag: v4.0.0/' "$tmp/deploy/helm-chart/kubernetes-secret-generator/values.yaml"
+sed -i.bak 's/^version: 4.0.0-rc.17$/version: 4.0.0/; s/^appVersion: v4.0.0-rc.17$/appVersion: v4.0.0/' "$tmp/deploy/helm-chart/kubernetes-secret-generator/Chart.yaml"
+sed -i.bak 's/tag: v4.0.0-rc.17/tag: v4.0.0/' "$tmp/deploy/helm-chart/kubernetes-secret-generator/values.yaml"
 git -C "$tmp" add .
 git -C "$tmp" commit -qm stable
 sha=$(git -C "$tmp" rev-parse HEAD)
@@ -33,10 +33,10 @@ run v4.0.0 "$sha"
 sed -i.bak 's/^version: 4.0.0$/version: 4.0.1/' "$tmp/deploy/helm-chart/kubernetes-secret-generator/Chart.yaml"
 if run v4.0.0 "$sha" >/dev/null 2>&1; then echo 'chart mismatch accepted' >&2; exit 1; fi
 
-identity=https://github.com/mrchypark/kubernetes-secret-generator/.github/workflows/release-candidate.yml@refs/tags/v4.0.0-rc.16
-sh scripts/verify-signing-identity.sh "$identity" https://token.actions.githubusercontent.com v4.0.0-rc.16
-old_identity=https://github.com/mrchypark/kubernetes-secret-generator/.github/workflows/workflow.yml@refs/tags/v4.0.0-rc.16
-if sh scripts/verify-signing-identity.sh "$old_identity" https://token.actions.githubusercontent.com v4.0.0-rc.16 >/dev/null 2>&1; then
+identity=https://github.com/mrchypark/kubernetes-secret-generator/.github/workflows/release-candidate.yml@refs/tags/v4.0.0-rc.17
+sh scripts/verify-signing-identity.sh "$identity" https://token.actions.githubusercontent.com v4.0.0-rc.17
+old_identity=https://github.com/mrchypark/kubernetes-secret-generator/.github/workflows/workflow.yml@refs/tags/v4.0.0-rc.17
+if sh scripts/verify-signing-identity.sh "$old_identity" https://token.actions.githubusercontent.com v4.0.0-rc.17 >/dev/null 2>&1; then
 	echo 'deleted workflow signing identity was accepted' >&2
 	exit 1
 fi
