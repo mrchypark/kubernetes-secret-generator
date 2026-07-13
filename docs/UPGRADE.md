@@ -28,7 +28,7 @@ export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
 export DEPLOYMENT_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.13
+export CHART_VERSION=4.0.0-rc.14
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -91,7 +91,7 @@ leave both unset to clear them. The replacement audit reference is persisted. An
 mismatch is rejected before mutation.
 
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
-before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.13 release
+before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.14 release
 blocker. Never switch CRD managers during the controller upgrade.
 
 ## Rollback
