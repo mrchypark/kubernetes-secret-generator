@@ -1,23 +1,3 @@
-{{- if and .Values.rbac.create .Values.leaderElection.enabled }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "kubernetes-secret-generator.rbacName" . }}-leader
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
-rules:
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["create"]
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    resourceNames: [{{ .Values.leaderElection.id | quote }}]
-    verbs: ["get", "update"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-{{- end }}
 {{- if and .Values.rbac.create (ne .Values.scope.mode "cluster") }}
 {{- $root := . }}
 {{- $namespaces := list .Release.Namespace }}

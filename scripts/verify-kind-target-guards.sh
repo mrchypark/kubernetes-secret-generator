@@ -77,7 +77,11 @@ for contract in \
 	'immediate legacy-adoption preflight reported blockers or an unstable snapshot' \
 	'replace --dry-run=server --field-manager=kubernetes-secret-generator-crd-manager' \
 	'replace --field-manager=kubernetes-secret-generator-crd-manager' \
-	'compatibilityProfile=$profile' \
+	'old controller Pod did not disappear before offline replacement' \
+	'v4 upgrade requires the previous controller Pod to be absent' \
+	'v3 rollback requires the v4 controller Pod to be absent' \
+	'more than one active controller Pod was observed' \
+	'.spec.strategy.type' \
 	'.metadata.ownerReferences[0].blockOwnerDeletion == true' \
 	'BasicAuth self-heal did not rotate credentials' \
 	'basic_hash=$healed_hash' \

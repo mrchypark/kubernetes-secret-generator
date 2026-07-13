@@ -2,7 +2,7 @@
 
 ## Routine checks
 
-- Confirm the Deployment and expected Pods are Ready.
+- Confirm the Deployment has exactly one desired and Ready Pod.
 - Inspect CR `Ready` Conditions and deduplicated Warning Events before controller logs.
 - Investigate `InvalidSpec`, owner conflicts, immutable/type conflicts, tracking conflicts,
   unexpected credential rotation, API connectivity failure, restart, panic, fatal, or OOM.
@@ -27,7 +27,7 @@ previous credential is required.
    Markdown. Resolve blockers and review stale-data warnings.
 2. Create and verify the encrypted backup.
 3. Record exact source, image, and chart digests in the GitHub release issue.
-4. Apply CRDs first, then upgrade the manager without changing scope.
+4. Stop the old controller and verify Pod zero; apply CRDs, then start exactly one new manager without changing scope.
 5. Observe the amd64 candidate for at least 10 and at most 15 minutes. Require Ready state, no restart/fatal error,
    no owner conflict, and no unexpected rotation.
 6. Build the arm64 image and verify `docker run --rm --platform linux/arm64 IMAGE --help`.
@@ -36,8 +36,9 @@ previous credential is required.
 ## Scope and sizing
 
 Use `ownNamespace` unless inventory demonstrates a broader requirement. Treat scope change
-as a separate operation. Resource requests and replica count are deployment choices, not a
-capacity promise. An optional disposable 100-object benchmark may inform sizing but must
+as a separate operation. v4 supports exactly one replica; HPA, manual scaling, and multiple
+releases with overlapping scope are unsupported. Resource requests remain a deployment choice,
+not a capacity promise. An optional disposable 100-object benchmark may inform sizing but must
 include its environment and must not be presented as an SLO or SLA.
 
 Escalate unresolved findings with redacted Conditions, Events, version/digest, Kubernetes

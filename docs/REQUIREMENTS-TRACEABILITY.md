@@ -1,4 +1,4 @@
-# v4.0.0-rc.15 requirements traceability
+# v4.0.0-rc.16 requirements traceability
 
 | Requirement | Automated check | Operator document |
 |---|---|---|
@@ -6,6 +6,7 @@
 | Crypto baseline and redaction | `scripts/preflight-baseline-src/main_test.go`, `scripts/check-test-artifacts.sh` | `docs/MIGRATION-v4.md` |
 | API/owner/type/regeneration behavior | unit and envtest suites | `docs/API.md`, `docs/TROUBLESHOOTING.md` |
 | CRD-first install/upgrade | Helm and release guard tests | `docs/INSTALL.md`, `docs/UPGRADE.md` |
+| Single controller and offline version transitions | chart and kind release-smoke guards | `docs/MIGRATION-v4.md`, `docs/ROLLBACK.md` |
 | Encrypted backup and manager rollback | backup/restore and rollback tests | `docs/BACKUP-RESTORE.md`, `docs/ROLLBACK.md` |
 | Candidate build and manual promotion | source/security/chart workflow checks | `docs/RELEASE.md` |
 

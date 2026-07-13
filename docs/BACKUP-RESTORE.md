@@ -60,7 +60,7 @@ The wrapper streams CRDs, CR metadata/spec, and managed Secret payloads directly
 
 ## Restore order: CR-owned
 
-1. Stop the controller and verify no leader remains.
+1. Stop the controller and verify no matching Pod remains.
 2. Restore target CRDs and wait for `Established`.
 3. Create CR metadata/spec without source UID/status/resourceVersion.
 4. Read the new CR UID in memory.
@@ -70,7 +70,7 @@ The wrapper streams CRDs, CR metadata/spec, and managed Secret payloads directly
 
 ## Restore order: annotation-managed
 
-1. Stop the controller and verify no leader remains.
+1. Stop the controller and verify no matching Pod remains.
 2. Create the Secret with original data, type, labels, annotations, immutable bit, and tracking.
 3. Do not add an owner reference or CR.
 4. Start the controller and verify in memory: byte equality, owner absence, and no rotation. Print booleans/counts only.

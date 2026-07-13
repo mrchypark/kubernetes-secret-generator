@@ -229,6 +229,34 @@ assert_owners() {
 }
 assert_owners
 
+controller_pod_count() {
+	k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq '.items | length'
+}
+
+stopped_pod_uids=
+stop_controller() {
+	stopped_pod_uids=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq -r '.items[].metadata.uid' | LC_ALL=C sort)
+	k -n "$namespace" scale deployment "$deployment" --replicas=0 >/dev/null
+	i=0
+	while [ "$i" -lt 60 ]; do
+		[ "$(controller_pod_count)" -eq 0 ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	[ "$(controller_pod_count)" -eq 0 ] || fail 'old controller Pod did not disappear before offline replacement'
+	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.replicas}')" = 0 ] || fail 'controller Deployment was not scaled to zero'
+}
+
+assert_single_controller() {
+	count=$(controller_pod_count)
+	[ "$count" -le 1 ] || fail 'more than one active controller Pod was observed'
+	[ "$count" -eq 1 ] || fail 'controller Pod is missing'
+	new_uid=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o jsonpath='{.items[0].metadata.uid}')
+	if [ -n "$stopped_pod_uids" ] && printf '%s\n' "$stopped_pod_uids" | grep -F -x -q "$new_uid"; then
+		fail 'old controller Pod survived the offline replacement'
+	fi
+}
+
 preflight_report=${PREFLIGHT_REPORT_OUT:-$workdir/preflight-report.md}
 case "$preflight_report" in /*) ;; *) fail 'PREFLIGHT_REPORT_OUT must be absolute' ;; esac
 [ ! -e "$preflight_report" ] || fail 'PREFLIGHT_REPORT_OUT already exists'
@@ -249,6 +277,9 @@ else
 	exit "$status"
 fi
 grep -F -x -q -- '- Blockers: **0**' "$preflight_report" || fail 'read-only v4 preflight reported blockers'
+
+[ "$(controller_pod_count)" -eq 1 ] || fail 'expected exactly one legacy controller Pod before migration'
+stop_controller
 
 # A v3.4.1 client-side apply owns the CRD version list. Take over only after
 # the zero-blocker preflight and exact normalized v3 spec verification.
@@ -307,34 +338,40 @@ k wait --for=condition=Established --timeout=60s \
 	crd/sshkeypairs.secretgenerator.mittwald.de \
 	crd/stringsecrets.secretgenerator.mittwald.de >/dev/null
 
-upgrade_manager() {
-	profile=$1 local_image=$2 reuse=${3:-false}
+upgrade_v4_manager() {
+	local_image=$1
 	image_repository=${local_image%:*}
 	image_tag=${local_image##*:}
-	reuse_flag=
-	[ "$reuse" = false ] || reuse_flag=--reuse-values
-	# shellcheck disable=SC2086 # Empty or the single constant --reuse-values.
+	[ "$(controller_pod_count)" -eq 0 ] || fail 'v4 upgrade requires the previous controller Pod to be absent'
 	helm upgrade "$release" "$CHART_TGZ" --kubeconfig "$kubeconfig" --kube-context "$context" \
-		--namespace "$namespace" --skip-crds $reuse_flag \
-		--set profile=dev --set replicaCount=1 --set scope.mode=ownNamespace \
+		--namespace "$namespace" --skip-crds --reset-values \
+		--set profile=dev --set scope.mode=ownNamespace \
 		--set migration.confirmedScope=ownNamespace --set crdLifecycle.manager=direct \
-		--set leaderElection.enabled=true --set leaderElection.id=kubernetes-secret-generator-lock \
-		--set "compatibilityProfile=$profile" --set image.registry= \
+		--set image.registry= \
 		--set-string image.repository="$image_repository" --set-string image.tag="$image_tag" \
 		--set-string image.digest= --set image.pullPolicy=IfNotPresent \
 		--wait --timeout 180s >/dev/null
 	k -n "$namespace" rollout status deployment/"$deployment" --timeout=180s >/dev/null
+	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.strategy.type}')" = Recreate ] || fail 'v4 Deployment does not use Recreate'
+	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.replicas}')" = 1 ] || fail 'v4 Deployment is not single-replica'
+	assert_single_controller
 	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WATCH_NAMESPACE")].value}')" = "$namespace" ] || fail 'manager scope changed'
-	i=0
-	while [ "$i" -lt 60 ]; do
-		[ -n "$(k -n "$namespace" get lease kubernetes-secret-generator-lock -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)" ] && return 0
-		sleep 1
-		i=$((i + 1))
-	done
-	fail 'default leader lease has no holder'
+}
+
+rollback_v3_manager() {
+	[ "$(controller_pod_count)" -eq 0 ] || fail 'v3 rollback requires the v4 controller Pod to be absent'
+	helm upgrade "$release" "$v3_runtime_tree/deploy/helm-chart/kubernetes-secret-generator" \
+		--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace" \
+		--skip-crds --reset-values --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
+		--set image.registry= --set image.repository=ksg-release-v3 \
+		--set image.pullPolicy=IfNotPresent --set-string "image.tag=$run_id" \
+		--wait --timeout 180s >/dev/null
+	k -n "$namespace" rollout status deployment/"$deployment" --timeout=180s >/dev/null
+	assert_single_controller
 }
 
 assert_controller_health() {
+	assert_single_controller
 	k -n "$namespace" wait --for=condition=Available deployment/"$deployment" --timeout=10s >/dev/null
 	desired=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.replicas}')
 	ready=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.status.readyReplicas}')
@@ -352,7 +389,7 @@ assert_recovery_state() {
 	[ "$(secret_hash smoke-string)$(secret_hash smoke-basic)$(secret_hash smoke-ssh)$(secret_hash smoke-annotation)" = "$string_hash$basic_hash$ssh_hash$annotation_hash" ] || fail 'observed recovery state changed a credential'
 }
 
-upgrade_manager v4 "$candidate_local_image" false
+upgrade_v4_manager "$candidate_local_image"
 for resource in stringsecret/smoke-string basicauth/smoke-basic sshkeypair/smoke-ssh; do
 	k -n "$namespace" wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' "$resource" --timeout=60s >/dev/null
 done
@@ -404,7 +441,8 @@ basic_hash=$healed_hash
 crd_hash=$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)
 fixtures=$(fixture_inventory)
 assert_fixture_inventory "$fixtures"
-upgrade_manager v3.4.1 "$v3_local_image" true
+stop_controller
+rollback_v3_manager
 [ "$(k get crd basicauths.secretgenerator.mittwald.de sshkeypairs.secretgenerator.mittwald.de stringsecrets.secretgenerator.mittwald.de -o json | jq -cS '[.items[]|{name:.metadata.name,spec:.spec}]|sort_by(.name)' | digest)" = "$crd_hash" ] || fail 'manager rollback changed v4 CRDs'
 [ "$(fixture_inventory)" = "$fixtures" ] || fail 'manager rollback changed managed fixture identity or ownership'
 assert_owners
@@ -413,7 +451,8 @@ assert_owners
 [ "$(secret_hash smoke-ssh)" = "$ssh_hash" ] || fail 'manager rollback rotated SSHKeyPair'
 [ "$(secret_hash smoke-annotation)" = "$annotation_hash" ] || fail 'manager rollback rotated annotation String Secret'
 
-upgrade_manager v4 "$candidate_local_image" true
+stop_controller
+upgrade_v4_manager "$candidate_local_image"
 for resource in stringsecret/smoke-string basicauth/smoke-basic sshkeypair/smoke-ssh; do
 	k -n "$namespace" wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' "$resource" --timeout=60s >/dev/null
 done

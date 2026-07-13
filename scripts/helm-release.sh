@@ -137,9 +137,6 @@ preserve_tmp=false
 cleanup() { [ "$preserve_tmp" = true ] || rm -rf "$tmpdir"; }
 trap cleanup 0 1 2 15
 scope_values=$tmpdir/scope-values.yaml
-compatibility_profile=${COMPATIBILITY_PROFILE:-v4}
-leader_election_enabled=${LEADER_ELECTION_ENABLED:-true}
-leader_election_id=${LEADER_ELECTION_ID:-kubernetes-secret-generator-lock}
 orphaned_flux_approval_ref=${ORPHANED_FLUX_APPROVAL_REF:-}
 orphaned_flux_approver=${ORPHANED_FLUX_APPROVER:-}
 orphaned_flux_approval_replacement_ref=${ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF:-}
@@ -148,21 +145,6 @@ case "$orphaned_flux_approval_ref:$orphaned_flux_approver:$orphaned_flux_approva
 	*[!A-Za-z0-9@._:/#-]*) fail 'orphaned Flux approval evidence contains unsupported characters' ;;
 esac
 case "$replace_orphaned_flux_approval" in true|false) ;; *) fail 'REPLACE_ORPHANED_FLUX_APPROVAL must be true or false' ;; esac
-case "$compatibility_profile" in
-	v4|v3.4.1) ;;
-	*) fail 'COMPATIBILITY_PROFILE must be v4 or v3.4.1' ;;
-esac
-case "$leader_election_enabled" in
-	true|false) ;;
-	*) fail 'LEADER_ELECTION_ENABLED must be true or false' ;;
-esac
-case "$leader_election_id" in
-	''|*[!a-z0-9.-]*|[!a-z0-9]*|*[!a-z0-9]) fail 'LEADER_ELECTION_ID must be a DNS-compatible Lease name' ;;
-esac
-[ "${#leader_election_id}" -le 63 ] || fail 'LEADER_ELECTION_ID must be at most 63 bytes'
-if [ "$compatibility_profile" = v3.4.1 ] && { [ "$leader_election_enabled" != true ] || [ "$leader_election_id" != kubernetes-secret-generator-lock ]; }; then
-	fail 'COMPATIBILITY_PROFILE=v3.4.1 rolling rollback requires the enabled default kubernetes-secret-generator-lock lease; use the approved downtime runbook for a custom lease'
-fi
 {
 	printf 'scope:\n  mode: %s\n  namespaces:\n' "$SCOPE_MODE"
 	if [ "$SCOPE_MODE" = namespaces ]; then
@@ -193,15 +175,13 @@ fi
 		printf '    []\n'
 	fi
 	if [ "$action" = upgrade ] || [ "$RAW_V3_MIGRATION" = true ]; then
-		printf 'migration:\n  confirmedScope: %s\n  confirmedNamespacesSHA256: %s\n' "$CONFIRMED_SCOPE" "$canonical_sha"
+		printf 'migration:\n  confirmedScope: "%s"\n  confirmedNamespacesSHA256: "%s"\n' "$CONFIRMED_SCOPE" "$canonical_sha"
 	else
 		printf 'migration:\n  confirmedScope: ""\n  confirmedNamespacesSHA256: ""\n'
 	fi
 	printf '  orphanedFluxApprovalRef: "%s"\n  orphanedFluxApprover: "%s"\n  orphanedFluxApprovalReplacementRef: "%s"\n' \
 		"$orphaned_flux_approval_ref" "$orphaned_flux_approver" "$orphaned_flux_approval_replacement_ref"
 	printf 'crdLifecycle:\n  manager: direct\n'
-	printf 'compatibilityProfile: %s\n' "$compatibility_profile"
-	printf 'leaderElection:\n  enabled: %s\n  id: %s\n' "$leader_election_enabled" "$leader_election_id"
 } >"$scope_values"
 
 release_matches=$(helm list --all --short --filter "^${RELEASE_NAME}$" --kube-context "$KUBE_CONTEXT" --namespace "$NAMESPACE")
@@ -401,7 +381,7 @@ if [ "$legacy_crd_count" -gt 0 ]; then
 	done
 	[ -z "${CONFIRM_ORPHANED_FLUX_OWNER:-}" ] || [ "$orphaned_flux_adoption" = true ] || fail 'CONFIRM_ORPHANED_FLUX_OWNER is only valid for exact orphaned Flux ownership'
 	if [ "$orphaned_flux_adoption" = false ]; then
-		[ -z "${CONFIRM_ORPHANED_FLUX_DECOMMISSIONED:-}${ORPHANED_FLUX_APPROVAL_REF:-}${ORPHANED_FLUX_APPROVER:-}${CONTROLLER_STOPPED_CONFIRM:-}" ] ||
+		[ -z "${CONFIRM_ORPHANED_FLUX_DECOMMISSIONED:-}${ORPHANED_FLUX_APPROVAL_REF:-}${ORPHANED_FLUX_APPROVER:-}" ] ||
 			fail 'orphaned Flux confirmations are only valid for exact orphaned Flux ownership'
 	fi
 	adopt_legacy_crds=true
@@ -412,14 +392,6 @@ case "$profile" in
 	production|dev) ;;
 	*) fail 'PROFILE must be production or dev' ;;
 esac
-if [ "$profile" = production ]; then
-	ready_hostnames=$(kubectl --context "$KUBE_CONTEXT" get nodes -o jsonpath='{range .items[*]}{.spec.unschedulable}{"\t"}{.metadata.labels.kubernetes\.io/hostname}{"\t"}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\t"}{range .spec.taints[*]}{.effect}{","}{end}{"\n"}{end}' |
-		awk -F '\t' '($1 == "" || $1 == "false") && $2 != "" && $3 == "True" && $4 !~ /(NoSchedule|NoExecute)/ { print $2 }' |
-		LC_ALL=C sort -u)
-	ready_hostname_count=$(printf '%s\n' "$ready_hostnames" | awk 'NF { count++ } END { print count + 0 }')
-	[ "$ready_hostname_count" -ge 2 ] || fail 'production profile requires at least two Ready schedulable nodes with distinct kubernetes.io/hostname labels'
-fi
-
 rendered=$tmpdir/rendered.yaml
 set -- helm template "$RELEASE_NAME" "$chart_dir" \
 	--kube-context "$KUBE_CONTEXT" \
@@ -468,25 +440,23 @@ if [ "$adopt_legacy_crds" = true ]; then
 		kubectl --context "$KUBE_CONTEXT" create --dry-run=client --filename "$crd_file" --output json |
 			jq --arg uid "$uid" --arg rv "$resource_version" '.metadata.uid=$uid | .metadata.resourceVersion=$rv' >"$target_crd"
 	done
+	[ "${CONTROLLER_STOPPED_CONFIRM:-}" = true ] || fail 'CONTROLLER_STOPPED_CONFIRM must exactly equal true for offline v3 migration'
+	stopped_deployment=$tmpdir/stopped-deployment.json
+	stopped_pods=$tmpdir/stopped-pods.json
+	kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployment "$DEPLOYMENT_NAME" --namespace "$NAMESPACE" -o json >"$stopped_deployment"
+	jq -e --arg name "$DEPLOYMENT_NAME" '.metadata.name == $name and .spec.replicas == 0 and (.status.readyReplicas // 0) == 0 and (.status.availableReplicas // 0) == 0' "$stopped_deployment" >/dev/null ||
+		fail 'legacy Deployment must have replicas=0 and ready/available replicas=0 before offline migration'
+	pod_selector=$(jq -er '.spec.selector.matchLabels | to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(",") | select(length > 0)' "$stopped_deployment")
+	kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get pods --namespace "$NAMESPACE" --selector "$pod_selector" -o json >"$stopped_pods"
+	jq -e '.items | length == 0' "$stopped_pods" >/dev/null || fail 'legacy controller Pods still exist; refusing offline migration'
 	if [ "$orphaned_flux_adoption" = true ]; then
-		[ "${CONTROLLER_STOPPED_CONFIRM:-}" = true ] || fail 'CONTROLLER_STOPPED_CONFIRM must exactly equal true for orphaned Flux adoption'
 		flux_crds=$tmpdir/flux-crds.json
 		flux_deployments=$tmpdir/flux-deployments.json
-		stopped_deployment=$tmpdir/stopped-deployment.json
-		stopped_pods=$tmpdir/stopped-pods.json
 		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get customresourcedefinitions.apiextensions.k8s.io -o json >"$flux_crds"
 		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployments.apps --all-namespaces -o json >"$flux_deployments"
 		jq -e '[.items[]? | select(.metadata.name | endswith(".toolkit.fluxcd.io"))] | length == 0' "$flux_crds" >/dev/null &&
 			jq -e '[.items[]? | select(.metadata.name as $name | ["source-controller","kustomize-controller","helm-controller","notification-controller","image-reflector-controller","image-automation-controller"] | index($name))] | length == 0' "$flux_deployments" >/dev/null ||
 			fail 'active Flux API or controller detected; refusing orphaned ownership adoption'
-		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get deployment "$DEPLOYMENT_NAME" --namespace "$NAMESPACE" -o json >"$stopped_deployment"
-		jq -e --arg name "$DEPLOYMENT_NAME" '.metadata.name == $name and .spec.replicas == 0 and (.status.readyReplicas // 0) == 0 and (.status.availableReplicas // 0) == 0' "$stopped_deployment" >/dev/null ||
-			fail 'legacy Deployment must have replicas=0 and ready/available replicas=0 before orphaned adoption'
-		pod_selector=$(jq -er '.spec.selector.matchLabels | to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(",") | select(length > 0)' "$stopped_deployment")
-		kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get pods --namespace "$NAMESPACE" --selector "$pod_selector" -o json >"$stopped_pods"
-		jq -e '.items | length == 0' "$stopped_pods" >/dev/null || fail 'legacy controller Pods still exist; refusing orphaned adoption'
-		lease_holder=$(kubectl --context "$KUBE_CONTEXT" --request-timeout=20s get lease "$leader_election_id" --namespace "$NAMESPACE" --ignore-not-found -o jsonpath='{.spec.holderIdentity}')
-		[ -z "$lease_holder" ] || fail 'leader Lease remains owned; clear only through the approved downtime runbook'
 	fi
 	adoption_failed() {
 		preserve_tmp=true

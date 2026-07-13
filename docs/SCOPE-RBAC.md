@@ -5,10 +5,10 @@ Scope controls both informer visibility and generated RBAC. Use `ownNamespace` u
 | Mode | Watched namespaces | Access objects |
 |---|---|---|
 | `ownNamespace` | Helm release namespace | Namespaced Roles/RoleBindings only in that namespace |
-| `namespaces` | Exact `scope.namespaces` list | One Role/RoleBinding per listed namespace; leader Lease remains in the release namespace |
-| `cluster` | All namespaces | ClusterRole/ClusterRoleBinding for managed resources; leader Lease remains namespaced |
+| `namespaces` | Exact `scope.namespaces` list | One Role/RoleBinding per listed namespace |
+| `cluster` | All namespaces | ClusterRole/ClusterRoleBinding for managed resources |
 
-The manager may get/list/watch and create/update/patch Secrets; get/list/watch CRs; update/patch CR status; and create/patch Events. It must not update CR specs, delete Pods, manage ServiceMonitors, or mutate unrelated Kubernetes APIs.
+The manager may get/list/watch and create/update/patch Secrets; get/list/watch CRs; update/patch CR status; and create/patch Events. It has no Lease permission. It must not update CR specs, delete Pods, manage ServiceMonitors, or mutate unrelated Kubernetes APIs.
 
 ## Scope change procedure
 

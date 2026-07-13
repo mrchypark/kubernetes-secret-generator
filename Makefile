@@ -68,6 +68,7 @@ test-source: verify-generated
 
 test-safety: test-shell
 	(cd scripts/check-test-artifacts-src && go test ./...)
+	scripts/test-manager-flags.sh
 	scripts/test-check-coverage.sh
 	scripts/verify-kind-target-guards.sh
 	test/safety.sh

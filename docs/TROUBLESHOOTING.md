@@ -16,6 +16,6 @@ If a Secret was deleted, CR-owned Secrets recreate with new generated credential
 
 If a consumer fails after self-heal, treat it as a credential rollout issue: verify the Ready condition, identify the exact consumer through metadata, use its supported reload/restart path, then test authentication without logging values.
 
-If reconcile errors repeat, confirm the error is transient (API availability/conflict) rather than a terminal Condition. Check leader uniqueness, API throttling, RBAC `can-i`, and watch scope. Do not widen RBAC or switch to cluster scope as an incident shortcut.
+If reconcile errors repeat, confirm the error is transient (API availability/conflict) rather than a terminal Condition. Verify that exactly one controller Pod exists, then check API throttling, RBAC `can-i`, and watch scope. Do not widen RBAC or switch to cluster scope as an incident shortcut.
 
 Escalate with controller/chart version, image digest, Kubernetes version, redacted Conditions/events, time range, and object kinds/counts. Follow [SECURITY.md](../SECURITY.md) for suspected vulnerabilities.

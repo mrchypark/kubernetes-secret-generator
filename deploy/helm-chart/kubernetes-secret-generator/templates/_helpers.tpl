@@ -44,16 +44,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-%s" (include "kubernetes-secret-generator.fullname" .) .Release.Namespace | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "kubernetes-secret-generator.replicas" -}}
-{{- if .Values.replicaCount -}}
-{{- .Values.replicaCount -}}
-{{- else if eq .Values.profile "production" -}}
-2
-{{- else -}}
-1
-{{- end -}}
-{{- end -}}
-
 {{- define "kubernetes-secret-generator.watchNamespace" -}}
 {{- if eq .Values.scope.mode "ownNamespace" -}}
 {{- .Release.Namespace -}}
@@ -108,14 +98,12 @@ imagePullSecrets:
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- $replicas := include "kubernetes-secret-generator.replicas" . | int -}}
-{{- if and (gt $replicas 1) (or (not .Values.pdb.enabled) (ne (.Values.pdb.minAvailable | int) 1)) -}}
-{{- fail "effective replicas greater than one require pdb.enabled=true and pdb.minAvailable=1" -}}
+{{- if ne (.Values.replicaCount | int) 1 -}}
+{{- fail "v4 supports exactly one controller replica; HPA, manual scaling, and multiple active releases are unsupported" -}}
 {{- end -}}
-{{- if and (eq .Values.profile "production") (or (not .Values.leaderElection.enabled) (lt $replicas 2)) -}}
-{{- fail "production profile requires leader election and at least two replicas" -}}
+{{- range .Values.args -}}
+{{- if regexMatch "^--leader-elect($|=)|^--leader-election-id($|=)" . -}}
+{{- fail "leader-election arguments were removed in v4; run exactly one controller replica" -}}
 {{- end -}}
-{{- if and (eq .Values.compatibilityProfile "v3.4.1") (or (not .Values.leaderElection.enabled) (ne .Values.leaderElection.id "kubernetes-secret-generator-lock")) -}}
-{{- fail "compatibilityProfile=v3.4.1 requires the enabled default kubernetes-secret-generator-lock lease" -}}
 {{- end -}}
 {{- end -}}
