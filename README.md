@@ -11,8 +11,8 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.14
-export IMAGE_DIGEST='sha256:<64-hex-digest-from-v4.0.0-rc.14-candidate>'
+export CHART_VERSION=4.0.0-rc.15
+export IMAGE_DIGEST='sha256:<64-hex-digest-from-v4.0.0-rc.15-candidate>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
 
@@ -74,7 +74,7 @@ Never use `--all` for production rotation without a reviewed change plan.
 
 The default `scope.mode=ownNamespace` watches only the installation namespace. `namespaces` and `cluster` are explicit opt-ins and require matching RBAC and a migration confirmation. CRs and Secrets are sensitive: enable Kubernetes at-rest encryption, restrict RBAC, encrypt backups, and never place Secret values or controller checksums in logs or tickets.
 
-`v4.0.0-rc.14` is a digest-addressed candidate for amd64 and arm64. It carries no SLA,
+`v4.0.0-rc.15` is a digest-addressed candidate for amd64 and arm64. It carries no SLA,
 capacity, HA, or production-certification claim. Build/promotion steps and candidate status
 are in [RELEASE.md](docs/RELEASE.md) and [SUPPORT.md](docs/SUPPORT.md).
 

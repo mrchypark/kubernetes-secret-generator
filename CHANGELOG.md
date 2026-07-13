@@ -4,7 +4,7 @@ All notable changes are recorded here. Releases follow semantic versioning.
 
 ## [Unreleased]
 
-The next artifact is `v4.0.0-rc.14`, a release candidate without SLA, capacity, HA, or
+The next artifact is `v4.0.0-rc.15`, a release candidate without SLA, capacity, HA, or
 production-certification claims.
 
 ### Changed
@@ -18,6 +18,8 @@ production-certification claims.
 - Encrypted backup/restore preserves user and KSG metadata exactly while excluding only
   kubectl's volatile `kubectl.kubernetes.io/last-applied-configuration` serialization.
 - Helm is the sole deployment source, namespace scope is the default, and images are deployed by digest.
+- Orphaned Flux CRD adoption accepts the two exact Kubernetes label ownership encodings observed
+  with and without the parent field marker, while continuing to reject any extra owner path.
 
 ### Security
 
