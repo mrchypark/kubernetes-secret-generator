@@ -388,6 +388,8 @@ observe_v4_recreate_upgrade() {
 	old_v4_uid=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq -er 'if (.items | length) == 1 then .items[0].metadata.uid else error("expected one old Pod") end')
 	[ -n "$old_v4_uid" ] || fail 'recorded v4 Pod UID is empty before Recreate upgrade'
 	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.strategy.type}')" = Recreate ] || fail 'v4-to-v4 upgrade requires the public Recreate Deployment'
+	deployment_uid=$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.metadata.uid}')
+	[ -n "$deployment_uid" ] || fail 'controller Deployment UID is empty before Recreate upgrade'
 	settling_rotation_state=$(rotation_state_fingerprint)
 	sleep 2
 	[ "$(rotation_state_fingerprint)" = "$settling_rotation_state" ] || fail 'rotation state did not settle before v4-to-v4 Recreate upgrade'
@@ -397,17 +399,34 @@ observe_v4_recreate_upgrade() {
 	recreate_stop=$workdir/recreate-observer.stop
 	recreate_summary=$workdir/recreate-observation.json
 	recreate_fifo=$workdir/recreate-observer.fifo
+	recreate_diagnostic=${RECREATE_DIAGNOSTIC_OUT:-$workdir/recreate-failure-snapshot.json}
+	case "$recreate_diagnostic" in /*) ;; *) fail 'RECREATE_DIAGNOSTIC_OUT must be absolute' ;; esac
+	[ ! -e "$recreate_diagnostic" ] || fail 'RECREATE_DIAGNOSTIC_OUT already exists'
 	mkfifo "$recreate_fifo"
 	(
 		while :; do
-			k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json |
-				jq -cS '[.items[].metadata.uid] | sort'
+			k -n "$namespace" get pods,replicasets.apps -l app.kubernetes.io/instance="$release" -o json |
+				jq -cS '
+					([.items[] | select(.kind == "ReplicaSet") |
+						(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $controllers |
+						{key:.metadata.uid,value:{found:true,name:.metadata.name,uid:.metadata.uid,controllers:$controllers}}] | from_entries) as $replicaSets |
+					[.items[] | select(.kind == "Pod") |
+						(.metadata.ownerReferences // [] | map(select(.controller == true) | {kind,name,uid})) as $podControllers |
+						($replicaSets[($podControllers[0].uid // "")] // {found:false,name:"",uid:"",controllers:[]}) as $replicaSet |
+						{uid:.metadata.uid,name:.metadata.name,phase:(.status.phase // "Unknown"),
+						 deletionTimestamp:(.metadata.deletionTimestamp // null),
+						 ready:any(.status.conditions[]?; .type == "Ready" and .status == "True"),
+						 owner:{podControllerCount:($podControllers | length),podController:($podControllers[0] // {}),
+							replicaSet:{found:$replicaSet.found,name:$replicaSet.name,uid:$replicaSet.uid,
+								controllerCount:($replicaSet.controllers | length),controller:($replicaSet.controllers[0] // {})}}}] |
+					sort_by(.uid)'
 			[ ! -e "$recreate_stop" ] || break
 			sleep 0.1
 		done
 	) >"$recreate_fifo" &
 	recreate_producer_pid=$!
-	OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" STOP_FILE="$recreate_stop" \
+	OLD_UID="$old_v4_uid" DEPLOYMENT_NAME="$deployment" DEPLOYMENT_UID="$deployment_uid" \
+		READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" DIAGNOSTIC_FILE="$recreate_diagnostic" STOP_FILE="$recreate_stop" \
 		"$repo_root/test/e2e/recreate-observer.sh" <"$recreate_fifo" &
 	recreate_observer_pid=$!
 	i=0
@@ -440,7 +459,7 @@ observe_v4_recreate_upgrade() {
 	fi
 	recreate_observer_pid=
 	[ "$producer_status" -eq 0 ] || fail 'Recreate observation producer ended before the intentional stop handshake'
-	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxPods <= 1 and .zeroObserved == true and .oldUID == $old and .newUID != $old and .order == ["old","zero","new"]' \
+	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxActiveControllers <= 1 and .terminalOverlapSamples >= 0 and .zeroObserved == true and .oldUID == $old and .newUID != $old and .order == ["old-active","zero-active","new-active-ready"]' \
 		"$recreate_summary" >/dev/null || fail 'Recreate observation summary is incomplete'
 	assert_single_controller
 	[ "$(secret_hash smoke-string):$(secret_hash smoke-basic):$(secret_hash smoke-ssh):$(secret_hash smoke-annotation)" = "$recreate_secret_fingerprints" ] ||

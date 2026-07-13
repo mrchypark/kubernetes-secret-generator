@@ -133,6 +133,7 @@ jobs:
           CANDIDATE_IMAGE: ${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
           KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
           PREFLIGHT_REPORT_OUT: ${{ github.workspace }}/preflight-report.md
+          RECREATE_DIAGNOSTIC_OUT: ${{ github.workspace }}/recreate-failure-snapshot.json
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64
@@ -147,7 +148,7 @@ jobs:
             cat release-smoke-summary.json
             exit "$status"
           fi
-          jq -e '.status == "passed" and .durationSeconds >= 600 and .durationSeconds < 900 and .healthChecks >= 1 and .controller == {ready:true,restarts:0,panicOrOOM:false,recovered:true} and .recreateObservation.samples >= 3 and .recreateObservation.maxPods <= 1 and .recreateObservation.zeroObserved == true and .recreateObservation.oldUID != .recreateObservation.newUID and .recreateObservation.order == ["old","zero","new"]' release-smoke-summary.json >/dev/null
+          jq -e '.status == "passed" and .durationSeconds >= 600 and .durationSeconds < 900 and .healthChecks >= 1 and .controller == {ready:true,restarts:0,panicOrOOM:false,recovered:true} and .recreateObservation.samples >= 3 and .recreateObservation.maxActiveControllers <= 1 and .recreateObservation.terminalOverlapSamples >= 0 and .recreateObservation.zeroObserved == true and .recreateObservation.oldUID != .recreateObservation.newUID and .recreateObservation.order == ["old-active","zero-active","new-active-ready"]' release-smoke-summary.json >/dev/null
 
       - name: Scan and stage sanitized failure diagnostics
         id: scan_failure_diagnostics
@@ -155,10 +156,11 @@ jobs:
         run: |
           diagnostics_dir="$RUNNER_TEMP/release-candidate-diagnostics"
           rm -rf "$diagnostics_dir"
-          mkdir -m 700 "$diagnostics_dir"
-          if test -e preflight-report.md; then
-            scripts/check-test-artifacts.sh preflight-report.md
-            install -m 400 preflight-report.md "$diagnostics_dir/preflight-report.md"
+          set --
+          test ! -e preflight-report.md || set -- "$@" preflight-report.md
+          test ! -e recreate-failure-snapshot.json || set -- "$@" recreate-failure-snapshot.json
+          if test "$#" -gt 0; then
+            scripts/check-test-artifacts.sh --stage "$diagnostics_dir" "$@"
             chmod 500 "$diagnostics_dir"
             echo "path=$diagnostics_dir" >>"$GITHUB_OUTPUT"
             echo 'ready=true' >>"$GITHUB_OUTPUT"
