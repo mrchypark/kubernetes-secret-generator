@@ -1,8 +1,8 @@
-# v4.0.0-rc.15 production-readiness directive
+# v4.0.0-rc.16 production-readiness directive
 
 ## Goal
 
-Ship a reviewable `v4.0.0-rc.15` candidate with safe migration tooling and clear rollback.
+Ship a reviewable `v4.0.0-rc.16` candidate with safe migration tooling and clear rollback.
 This release does not claim an SLA, capacity, high availability, automatic failover, or
 production certification. Existing security and API correctness checks remain mandatory.
 
@@ -17,15 +17,17 @@ production certification. Existing security and API correctness checks remain ma
    corrected before upgrade; warnings receive human review in the release issue.
 4. Upgrade CRDs before the manager. Do not downgrade CRDs during manager rollback.
 5. Preserve encrypted backup/restore and manager rollback runbooks.
-6. Build the candidate in GitHub Actions, attach digests and test summaries to a GitHub
+6. Run exactly one v4 controller Pod with no leader election, HPA, PDB, or HA topology.
+   Treat v3 migration and v4-to-v3 rollback as downtime operations gated by Pod zero.
+7. Build the candidate in GitHub Actions, attach digests and test summaries to a GitHub
    release issue, and use the protected GitHub Environment for the manual promotion step.
-7. Run an amd64 smoke test for at least 10 and at most 15 minutes, and build the arm64
+8. Run an amd64 smoke test for at least 10 and at most 15 minutes, and build the arm64
    image and verify its startup path with `--help`. A disposable 100-object
    benchmark is optional diagnostic data and must not be described as capacity or an SLA.
 
 ## Deferred scope
 
-The following are deliberately not per-release blockers for `v4.0.0-rc.15`: automated
+The following are deliberately not per-release blockers for `v4.0.0-rc.16`: automated
 multi-stage attestations, long-running resilience qualification, architecture/minor upgrade
 matrices, failover certification, mandatory dual deployment-path rehearsal, HA topology,
 and PDB availability claims.

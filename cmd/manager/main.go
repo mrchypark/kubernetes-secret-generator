@@ -56,8 +56,6 @@ func main() {
 	pflag.String("secret-encoding", "base64", "Encoding for secrets")
 	pflag.Bool("use-metrics-service", false, "Deprecated; metrics are always exposed on the configured metrics bind address")
 	pflag.Bool("disable-crd-support", false, "Whether to disable CRD support and registering")
-	pflag.Bool("leader-elect", true, "Enable leader election for controller manager")
-	pflag.String("leader-election-id", "kubernetes-secret-generator-lock", "Name of the leader election Lease")
 
 	pflag.Parse()
 
@@ -102,12 +100,9 @@ func main() {
 
 	// Set default manager options
 	options := manager.Options{
-		Cache:                      cacheOptions(namespaces),
-		Metrics:                    metricsserver.Options{BindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort)},
-		HealthProbeBindAddress:     ":8080",
-		LeaderElection:             viper.GetBool("leader-elect"),
-		LeaderElectionResourceLock: "leases",
-		LeaderElectionID:           viper.GetString("leader-election-id"),
+		Cache:                  cacheOptions(namespaces),
+		Metrics:                metricsserver.Options{BindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort)},
+		HealthProbeBindAddress: ":8080",
 	}
 
 	// add custom resources to scheme

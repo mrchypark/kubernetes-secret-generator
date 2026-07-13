@@ -99,7 +99,10 @@ has "$root/scripts/helm-release.sh" '.manager == "kustomize-controller" and .ope
 has "$root/scripts/helm-release.sh" 'endswith(".toolkit.fluxcd.io")'
 has "$root/scripts/helm-release.sh" 'get deployments.apps --all-namespaces'
 has "$root/scripts/helm-release.sh" 'get pods --namespace "$NAMESPACE" --selector "$pod_selector"'
-has "$root/scripts/helm-release.sh" 'get lease "$leader_election_id"'
+has "$root/scripts/helm-release.sh" '.spec.replicas == 0'
+has "$root/scripts/helm-release.sh" ".items | length == 0"
+has "$root/scripts/helm-release.sh" 'confirmedScope: "%s"'
+has "$root/scripts/helm-release.sh" 'confirmedNamespacesSHA256: "%s"'
 has "$root/scripts/helm-release.sh" 'recovery inventory (identity only)'
 has "$root/scripts/helm-release.sh" 'discarded all resourceVersion-bound target files'
 has "$root/scripts/helm-release.sh" 'replace_with_revalidation'

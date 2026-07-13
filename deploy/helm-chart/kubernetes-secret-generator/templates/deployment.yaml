@@ -6,16 +6,13 @@ metadata:
   labels:
     {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
 spec:
-  replicas: {{ include "kubernetes-secret-generator.replicas" . }}
+  replicas: 1
   revisionHistoryLimit: 3
   selector:
     matchLabels:
       {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 6 }}
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   template:
     metadata:
       labels:
@@ -38,10 +35,6 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           args:
             {{- $args := .Values.args }}
-            {{- if eq .Values.compatibilityProfile "v4" }}
-            {{- $args = append $args (printf "--leader-elect=%t" .Values.leaderElection.enabled) }}
-            {{- $args = append $args (printf "--leader-election-id=%s" .Values.leaderElection.id) }}
-            {{- end }}
             {{- if not .Values.crdControllers.enabled }}
             {{- $args = append $args "--disable-crd-support" }}
             {{- end }}
@@ -79,7 +72,7 @@ spec:
             - name: WATCH_NAMESPACE
               value: {{ include "kubernetes-secret-generator.watchNamespace" . | quote }}
             - name: REGENERATE_INSECURE
-              value: {{ ternary "false" (.Values.regenerateInsecure | toString) (eq .Values.compatibilityProfile "v3.4.1") | quote }}
+              value: {{ .Values.regenerateInsecure | toString | quote }}
             - name: SECRET_LENGTH
               value: {{ .Values.secretLength | quote }}
             - name: SSH_KEY_ALGORITHM
@@ -90,21 +83,6 @@ spec:
           volumeMounts:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if or (eq .Values.profile "production") .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
-        {{- if eq .Values.profile "production" }}
-        - maxSkew: 1
-          minDomains: 2
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          labelSelector:
-            matchLabels:
-              {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 14 }}
-        {{- end }}
-        {{- with .Values.topologySpreadConstraints }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -5,14 +5,13 @@ global:
 image:
   registry: ghcr.io
   repository: mrchypark/kubernetes-secret-generator
-  tag: v4.0.0-rc.15
+  tag: v4.0.0-rc.16
   digest: ""
   pullPolicy: IfNotPresent
   pullSecrets: []
 
 profile: production
-replicaCount: null
-compatibilityProfile: v4
+replicaCount: 1
 
 scope:
   mode: ownNamespace
@@ -33,10 +32,6 @@ crdLifecycle:
   manager: direct
 crdControllers:
   enabled: true
-
-leaderElection:
-  enabled: true
-  id: kubernetes-secret-generator-lock
 
 args: []
 nameOverride: ""
@@ -72,7 +67,6 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
-topologySpreadConstraints: []
 volumeMounts: []
 volumes: []
 
@@ -93,10 +87,6 @@ metrics:
     interval: 30s
     scrapeTimeout: 10s
     labels: {}
-
-pdb:
-  enabled: true
-  minAvailable: 1
 
 networkPolicy:
   enabled: false

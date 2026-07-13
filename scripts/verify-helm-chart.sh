@@ -57,13 +57,14 @@ done
 production=$tmpdir/production-ownNamespace.yaml
 development=$tmpdir/dev-ownNamespace.yaml
 grep -F -q "image: \"ghcr.io/mrchypark/kubernetes-secret-generator@$digest\"" "$production" || fail 'production image is not digest-pinned'
-grep -F -q 'replicas: 2' "$production" || fail 'production profile is not HA by default'
-grep -F -q 'minDomains: 2' "$production" || fail 'production topology spread is missing'
-grep -F -q 'kind: PodDisruptionBudget' "$production" || fail 'production PDB is missing'
-grep -F -q -- '- --leader-elect=true' "$production" || fail 'leader election is not enabled'
-grep -F -q -- '- --leader-election-id=kubernetes-secret-generator-lock' "$production" || fail 'default leader election ID is missing'
+grep -F -q 'replicas: 1' "$production" || fail 'production profile is not single-controller'
+grep -F -q 'type: Recreate' "$production" || fail 'controller Deployment does not use offline Recreate updates'
+if grep -F -q 'rollingUpdate:' "$production"; then fail 'controller Deployment unexpectedly renders rollingUpdate'; fi
+if grep -F -q 'topologySpreadConstraints:' "$production"; then fail 'controller Deployment unexpectedly renders HA topology spread'; fi
+if grep -F -q 'kind: PodDisruptionBudget' "$production"; then fail 'controller chart unexpectedly renders a PDB'; fi
+if grep -F -q -- '--leader-elect' "$production" || grep -F -q -- '--leader-election-id' "$production"; then fail 'controller chart renders removed leader-election flags'; fi
+if grep -F -q 'resources: ["leases"]' "$production"; then fail 'controller chart renders removed Lease RBAC'; fi
 grep -F -q 'replicas: 1' "$development" || fail 'dev profile is not single-node'
-if grep -F -q 'kind: PodDisruptionBudget' "$development"; then fail 'dev profile unexpectedly renders a PDB'; fi
 for field in 'runAsNonRoot: true' 'allowPrivilegeEscalation: false' 'readOnlyRootFilesystem: true' 'type: RuntimeDefault' 'drop:' 'cpu: 50m' 'memory: 64Mi'; do
 	grep -F -q "$field" "$production" || fail "production pod security/resources missing: $field"
 done
@@ -96,8 +97,7 @@ for scope in ownNamespace namespaces cluster; do
 	grep -F -q 'verbs: ["get", "list", "watch"]' "$rbac" || fail "$scope main CR verbs differ from the contract"
 	grep -F -q 'resources: ["basicauths/status", "sshkeypairs/status", "stringsecrets/status"]' "$rbac" || fail "$scope RBAC lacks status access"
 done
-grep -F -q 'resourceNames: ["kubernetes-secret-generator-lock"]' "$tmpdir/rbac-ownNamespace.yaml" || fail 'leader Lease is not resource-name restricted'
-grep -F -q 'verbs: ["get", "update"]' "$tmpdir/rbac-ownNamespace.yaml" || fail 'leader Lease verbs are not minimal'
+if grep -F -q 'coordination.k8s.io' "$tmpdir/rbac-ownNamespace.yaml"; then fail 'RBAC still contains coordination API access'; fi
 
 if helm template ksg "$chart" --namespace ksg-system --set profile=production >/dev/null 2>&1; then
 	fail 'production profile accepted a mutable image reference'
@@ -111,15 +111,19 @@ fi
 if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set-string image.tag=latest >/dev/null 2>&1; then
 	fail 'chart accepted image.tag=latest'
 fi
-if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set replicaCount=2 --set pdb.enabled=false >/dev/null 2>&1; then
-	fail 'multi-replica dev profile accepted pdb.enabled=false'
+if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set replicaCount=2 >/dev/null 2>&1; then
+	fail 'chart accepted multiple controller replicas'
 fi
-if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set replicaCount=2 --set pdb.minAvailable=2 >/dev/null 2>&1; then
-	fail 'multi-replica dev profile accepted pdb.minAvailable other than 1'
-fi
-if helm template ksg "$chart" --namespace ksg-system --set profile=production --set-string "image.digest=$digest" --set pdb.enabled=false >/dev/null 2>&1; then
-	fail 'production profile accepted pdb.enabled=false'
-fi
+for removed in leaderElection.enabled=true pdb.enabled=true 'topologySpreadConstraints[0].maxSkew=1' compatibilityProfile=v3.4.1; do
+	if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set "$removed" >/dev/null 2>&1; then
+		fail "chart accepted removed HA value: $removed"
+	fi
+done
+for removed_arg in --leader-elect=true --leader-election-id=kubernetes-secret-generator-lock; do
+	if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set-string "args[0]=$removed_arg" >/dev/null 2>&1; then
+		fail "chart accepted removed manager argument: $removed_arg"
+	fi
+done
 if helm template ksg "$chart" --namespace ksg-system --set profile=dev --set installCRDs=true >/dev/null 2>&1; then
 	fail 'chart accepted removed installCRDs value'
 fi

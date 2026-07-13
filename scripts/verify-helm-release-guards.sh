@@ -18,10 +18,12 @@ cat >"$tmpdir/bin/helm" <<'EOF'
 #!/bin/sh
 printf 'helm %s\n' "$*" >>"$CALL_LOG"
 check_approval_values() {
-	[ -n "${MOCK_EXPECT_APPROVAL_REF+x}" ] || return 0
 	while [ "$#" -gt 0 ]; do
 		if [ "$1" = --values ]; then
 			shift
+			grep -E -q '^  confirmedScope: "(ownNamespace|namespaces|cluster)?"$' "$1" || exit 73
+			grep -E -q '^  confirmedNamespacesSHA256: "([0-9a-f]{64})?"$' "$1" || exit 73
+			[ -n "${MOCK_EXPECT_APPROVAL_REF+x}" ] || return 0
 			grep -F -q "  orphanedFluxApprovalRef: \"$MOCK_EXPECT_APPROVAL_REF\"" "$1" || exit 73
 			grep -F -q "  orphanedFluxApprover: \"$MOCK_EXPECT_APPROVER\"" "$1" || exit 73
 			grep -F -q "  orphanedFluxApprovalReplacementRef: \"${MOCK_EXPECT_REPLACEMENT_REF:-}\"" "$1" || exit 73
@@ -39,7 +41,7 @@ case "$1" in
 	template) check_approval_values "$@"; printf 'image: "example.invalid/ksg@%s"\n' "$IMAGE_DIGEST" ;;
 	package)
 		while [ "$#" -gt 0 ]; do
-			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.15.tgz"; break; fi
+			if [ "$1" = --destination ]; then shift; touch "$1/ksg-4.0.0-rc.16.tgz"; break; fi
 			shift
 		done
 		;;
@@ -185,8 +187,8 @@ common_env() {
 	env PATH="$tmpdir/bin:$PATH" CALL_LOG="$log" REAL_OPENSSL="$real_openssl" MOCK_SPEC_HASH="$tmpdir/spec-hash" \
 		MOCK_CHART_DIR="$repo_root/deploy/helm-chart/kubernetes-secret-generator" \
 		KUBE_CONTEXT=explicit-target CONFIRM_CONTEXT=explicit-target \
-		NAMESPACE=ksg-system RELEASE_NAME=ksg DEPLOYMENT_NAME=ksg CHART_VERSION=4.0.0-rc.15 \
-		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev "$@"
+		NAMESPACE=ksg-system RELEASE_NAME=ksg DEPLOYMENT_NAME=ksg CHART_VERSION=4.0.0-rc.16 \
+		IMAGE_DIGEST="$digest" CRD_LIFECYCLE_MANAGER=direct PROFILE=dev CONTROLLER_STOPPED_CONFIRM=true "$@"
 }
 
 assert_no_mutation() {
@@ -268,7 +270,7 @@ fi
 [ ! -s "$log" ] || fail 'release-name validation invoked a cluster tool'
 
 : >"$log"
-if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system|owner|flux|ksg-system|ksg|4.0.0-rc.15|ownNamespace||||\n' \
+if common_env MOCK_RELEASE_EXISTS=true MOCK_OWNER_RECORD='ksg-system|owner|flux|ksg-system|ksg|4.0.0-rc.16|ownNamespace||||\n' \
 	SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
 	fail 'direct upgrade accepted Flux CRD lifecycle ownership'
@@ -291,13 +293,13 @@ fi
 assert_no_mutation
 
 : >"$log"
-common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.15|ownNamespace||||\n' \
+common_env MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.16|ownNamespace||||\n' \
 	REINSTALL=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
 	CONFIRM_REINSTALL=explicit-target/ksg-system/ksg \
 	"$repo_root/scripts/helm-release.sh" install >/dev/null
 grep -F -q 'helm install ksg ' "$log" || fail 'confirmed retained-CRD reinstall did not use helm install'
 
-persisted_owner='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.15|ownNamespace||issue#23|@mrchypark|initial#22\n'
+persisted_owner='ksg-system|owner|direct|ksg-system|ksg|4.0.0-rc.16|ownNamespace||issue#23|@mrchypark|initial#22\n'
 : >"$log"
 common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_VERSION=4.0.0 MOCK_OWNER_RECORD="$persisted_owner" \
 	MOCK_EXPECT_APPROVAL_REF=issue#23 MOCK_EXPECT_APPROVER=@mrchypark MOCK_EXPECT_REPLACEMENT_REF=initial#22 \
@@ -579,7 +581,7 @@ for fixture in active-api active-controller; do
 	assert_no_mutation
 done
 
-for fixture in missing-stop-confirm running-replica ready-replica running-pod owned-lease; do
+for fixture in missing-stop-confirm running-replica ready-replica running-pod; do
 	rm -f "$tmpdir/spec-hash"
 	: >"$log"
 	case "$fixture" in
@@ -587,7 +589,6 @@ for fixture in missing-stop-confirm running-replica ready-replica running-pod ow
 		running-replica) set -- MOCK_STOPPED_REPLICAS=1 CONTROLLER_STOPPED_CONFIRM=true ;;
 		ready-replica) set -- MOCK_READY_REPLICAS=1 CONTROLLER_STOPPED_CONFIRM=true ;;
 		running-pod) set -- MOCK_CONTROLLER_PODS=true CONTROLLER_STOPPED_CONFIRM=true ;;
-		owned-lease) set -- MOCK_LEASE_HOLDER=legacy-leader CONTROLLER_STOPPED_CONFIRM=true ;;
 	esac
 	if common_env MOCK_RELEASE_EXISTS=true MOCK_CRD_EXISTS=true MOCK_LEGACY_MATCH=true \
 		MOCK_FIELD_MANAGER=kustomize-controller MOCK_FIELD_OPERATION=Apply "$@" \
@@ -697,21 +698,5 @@ grep -F -q 'helm uninstall ksg --kube-context explicit-target --namespace ksg-sy
 if grep -F -q 'kubectl --context explicit-target config current-context' "$log"; then
 	fail 'deployment guard depends on current-context'
 fi
-
-: >"$log"
-if common_env MOCK_DUPLICATE_NODES=true PROFILE=production \
-	"$repo_root/scripts/helm-release.sh" install >/dev/null 2>&1; then
-	fail 'production preflight accepted duplicate hostname topology domains'
-fi
-grep -F -q 'kubectl --context explicit-target get nodes' "$log" || fail 'production preflight did not inspect schedulable node topology'
-assert_no_mutation
-
-: >"$log"
-if common_env MOCK_RELEASE_EXISTS=true SCOPE_MODE=ownNamespace CONFIRMED_SCOPE=ownNamespace \
-	COMPATIBILITY_PROFILE=v3.4.1 LEADER_ELECTION_ID=custom-v4-lock \
-	"$repo_root/scripts/helm-release.sh" upgrade >/dev/null 2>&1; then
-	fail 'v3.4.1 rolling rollback accepted a custom leader-election ID'
-fi
-assert_no_mutation
 
 printf 'Helm release guard verification passed\n'

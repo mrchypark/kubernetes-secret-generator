@@ -1,20 +1,3 @@
-{{- if and .Values.rbac.create .Values.leaderElection.enabled }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: {{ include "kubernetes-secret-generator.rbacName" . }}-leader
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: {{ include "kubernetes-secret-generator.rbacName" . }}-leader
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "kubernetes-secret-generator.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace }}
-{{- end }}
 {{- if and .Values.rbac.create (ne .Values.scope.mode "cluster") }}
 {{- $root := . }}
 {{- $namespaces := list .Release.Namespace }}

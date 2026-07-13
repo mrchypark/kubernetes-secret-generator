@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "profile", "scope", "migration", "crdLifecycle", "crdControllers", "leaderElection"],
+  "required": ["image", "profile", "replicaCount", "scope", "migration", "crdLifecycle", "crdControllers"],
   "properties": {
     "global": {
       "type": "object",
@@ -26,8 +26,7 @@
       }
     },
     "profile": { "enum": ["production", "dev"] },
-    "replicaCount": { "type": ["integer", "null"], "minimum": 1 },
-    "compatibilityProfile": { "enum": ["v4", "v3.4.1"] },
+    "replicaCount": { "type": "integer", "const": 1 },
     "scope": {
       "type": "object",
       "additionalProperties": false,
@@ -77,15 +76,6 @@
       "required": ["enabled"],
       "properties": { "enabled": { "type": "boolean" } }
     },
-    "leaderElection": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "id"],
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "id": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" }
-      }
-    },
     "args": { "type": "array", "items": { "type": "string" } },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
@@ -107,7 +97,6 @@
     "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
     "tolerations": { "type": "array", "items": { "type": "object" } },
     "affinity": { "type": "object" },
-    "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } },
     "volumeMounts": { "type": "array", "items": { "type": "object" } },
     "volumes": { "type": "array", "items": { "type": "object" } },
     "regenerateInsecure": { "type": "boolean" },
@@ -142,15 +131,6 @@
         }
       }
     },
-    "pdb": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "minAvailable"],
-      "properties": {
-        "enabled": { "type": "boolean" },
-        "minAvailable": { "type": "integer", "minimum": 1 }
-      }
-    },
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,
@@ -172,34 +152,6 @@
     "livenessProbe": { "$ref": "#/definitions/probe" },
     "readinessProbe": { "$ref": "#/definitions/probe" }
   },
-  "allOf": [
-    {
-      "if": { "properties": { "profile": { "const": "production" } } },
-      "then": {
-        "properties": {
-          "pdb": {
-            "properties": {
-              "enabled": { "const": true },
-              "minAvailable": { "const": 1 }
-            }
-          }
-        }
-      }
-    },
-    {
-      "if": { "properties": { "replicaCount": { "type": "integer", "minimum": 2 } } },
-      "then": {
-        "properties": {
-          "pdb": {
-            "properties": {
-              "enabled": { "const": true },
-              "minAvailable": { "const": 1 }
-            }
-          }
-        }
-      }
-    }
-  ],
   "definitions": {
     "probe": {
       "type": "object",
