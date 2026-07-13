@@ -159,7 +159,7 @@ spec: {username: admin, length: "32", encoding: base64url}
 apiVersion: secretgenerator.mittwald.de/v1alpha1
 kind: SSHKeyPair
 metadata: {name: smoke-ssh}
-spec: {algorithm: ed25519, privateKeyField: ssh-privatekey, publicKeyField: ssh-publickey}
+spec: {length: "2048"}
 ---
 apiVersion: v1
 kind: Secret
