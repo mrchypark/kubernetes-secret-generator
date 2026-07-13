@@ -48,10 +48,13 @@ review warnings for stale keys or labels and record the disposition without copy
   offline v3/v4 transition requires zero matching Pod objects before replacement. It also
   performs a real v4-to-v4 public-chart upgrade that changes only the Pod template termination
   grace period and never permits more than one non-terminal Pod with the exact
-  Pod-to-ReplicaSet-to-Deployment owner chain. The 100 ms observer records either an explicit
-  zero-active sample or a direct terminal-old/new-active handoff. The latter is reported as an
-  inferred zero, never as a separately sampled zero. One different Ready UID must follow while
-  Secret and rotation state fingerprints remain unchanged.
+  Pod-to-ReplicaSet-to-Deployment owner chain in any sample. The 100 ms observer always records
+  the sampled maximum and the old/new UID transition. It separately reports an explicit
+  zero-active sample, a terminal-old/new-active handoff that supports an inferred zero, or an
+  unsampled handoff when polling saw neither. The unsampled mode is evidence only of the
+  `Recreate` strategy and sampled single-active invariant; it makes no zero or terminal-handoff
+  claim. One different Ready UID must follow while Secret and rotation state fingerprints remain
+  unchanged.
 - Build the arm64 image and run its startup path, for example
   `docker run --rm --platform linux/arm64 IMAGE@DIGEST --help`. This is a build/startup
   check, not real-arm64 production certification.

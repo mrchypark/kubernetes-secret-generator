@@ -54,6 +54,7 @@ run() {
 run valid-terminal-overlap true "$old_only" "$old_terminal_only" "$terminal_new_pending" "$terminal_new_ready"
 jq -e '.samples == 4 and .maxActiveControllers == 1 and .terminalOverlapSamples == 2 and
 	.explicitZeroObserved == true and .terminalHandoffObserved == false and .inferredZero == false and
+	.unsampledHandoffObserved == false and
 	.oldUID == "old" and .newUID == "new" and
 	.order == ["old-active","zero-active","new-active-ready"]' "$tmpdir/valid-terminal-overlap.json" >/dev/null
 [ -f "$tmpdir/valid-terminal-overlap.ready" ] || {
@@ -64,6 +65,7 @@ jq -e '.samples == 4 and .maxActiveControllers == 1 and .terminalOverlapSamples 
 run valid-direct-terminal-handoff true "$old_only" "$terminal_new_pending" "$terminal_new_ready"
 jq -e '.samples == 3 and .maxActiveControllers == 1 and .terminalOverlapSamples == 2 and
 	.explicitZeroObserved == false and .terminalHandoffObserved == true and .inferredZero == true and
+	.unsampledHandoffObserved == false and
 	.oldUID == "old" and .newUID == "new" and
 	.order == ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]' "$tmpdir/valid-direct-terminal-handoff.json" >/dev/null
 [ -f "$tmpdir/valid-direct-terminal-handoff.ready" ] || {
@@ -72,6 +74,20 @@ jq -e '.samples == 3 and .maxActiveControllers == 1 and .terminalOverlapSamples 
 }
 [ ! -e "$tmpdir/valid-direct-terminal-handoff-diagnostic.json" ] || {
 	printf '%s\n' 'error: direct terminal handoff wrote a failure diagnostic' >&2
+	exit 2
+}
+
+run valid-unsampled-handoff true "$old_only" "$new_pending_only" "$new_ready_only"
+jq -e '.samples == 3 and .maxActiveControllers == 1 and .terminalOverlapSamples == 0 and
+	.explicitZeroObserved == false and .terminalHandoffObserved == false and .inferredZero == false and
+	.unsampledHandoffObserved == true and .oldUID == "old" and .newUID == "new" and
+	.order == ["old-active","unsampled-handoff","new-active-ready"]' "$tmpdir/valid-unsampled-handoff.json" >/dev/null
+[ -f "$tmpdir/valid-unsampled-handoff.ready" ] || {
+	printf '%s\n' 'error: unsampled handoff did not signal readiness' >&2
+	exit 2
+}
+[ ! -e "$tmpdir/valid-unsampled-handoff-diagnostic.json" ] || {
+	printf '%s\n' 'error: unsampled handoff wrote a failure diagnostic' >&2
 	exit 2
 }
 [ ! -e "$tmpdir/valid-terminal-overlap-diagnostic.json" ] || {
@@ -107,7 +123,6 @@ reject missing-old true "$empty" "$new_ready_only"
 reject invalid-snapshot true 'not-json'
 reject pending-overlap true "$old_only" "$old_deleting_new_pending"
 reject unknown-overlap true "$old_only" "$old_deleting_new_unknown"
-reject new-before-zero true "$old_only" "$new_ready_only"
 reject old-reappeared true "$old_only" "$empty" "$old_only"
 reject replacement-changed true "$old_only" "$empty" "$new_pending_only" "$other_ready_only"
 reject replacement-disappeared true "$old_only" "$empty" "$new_pending_only" "$empty"

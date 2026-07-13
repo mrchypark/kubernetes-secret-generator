@@ -30,9 +30,10 @@ terminal_overlap_samples=0
 explicit_zero_observed=false
 terminal_handoff_observed=false
 inferred_zero=false
+unsampled_handoff_observed=false
 
 while IFS= read -r raw_snapshot; do
-	if ! snapshot=$(printf '%s\n' "$raw_snapshot" | jq -ceS '
+	if ! analyzed=$(printf '%s\n' "$raw_snapshot" | jq -cerS --arg deploymentName "$deployment_name" --arg deploymentUID "$deployment_uid" --arg old "$old_uid" '
 		if type != "array" then error("snapshot is not an array") else . end |
 		if all(.[].uid; type == "string" and length > 0) and
 		   all(.[].name; type == "string" and length > 0) and
@@ -46,16 +47,9 @@ while IFS= read -r raw_snapshot; do
 			(.owner.replicaSet | keys == ["controller","controllerCount","found","name","uid"]) and
 			(.owner.replicaSet.controller | type == "object" and ((keys - ["kind","name","uid"]) | length == 0)))
 		then . else error("snapshot has invalid Pod identity or status fields") end |
-		if ([.[].uid] | unique | length) == length then . else error("snapshot has duplicate Pod UIDs") end
-	'); then
-		last_snapshot='[]'
-		fail 'snapshot is not a sanitized Pod status array'
-	fi
-	last_snapshot=$snapshot
-	samples=$((samples + 1))
-
-	if ! printf '%s\n' "$snapshot" | jq -e --arg deploymentName "$deployment_name" --arg deploymentUID "$deployment_uid" '
-		all(.[];
+		if ([.[].uid] | unique | length) == length then . else error("snapshot has duplicate Pod UIDs") end |
+		. as $snapshot |
+		(all(.[];
 			.owner.podControllerCount == 1 and
 			.owner.podController.kind == "ReplicaSet" and
 			(.owner.podController.name | type == "string" and length > 0) and
@@ -66,25 +60,35 @@ while IFS= read -r raw_snapshot; do
 			.owner.replicaSet.controllerCount == 1 and
 			.owner.replicaSet.controller.kind == "Deployment" and
 			.owner.replicaSet.controller.name == $deploymentName and
-			.owner.replicaSet.controller.uid == $deploymentUID)
-	' >/dev/null; then
+			.owner.replicaSet.controller.uid == $deploymentUID)) as $ownerOK |
+		[.[] | select(.phase != "Succeeded" and .phase != "Failed")] as $active |
+		((length > 1) and any(.[]; .phase == "Succeeded" or .phase == "Failed") and
+			any(.[]; .phase != "Succeeded" and .phase != "Failed")) as $terminalOverlap |
+		(any(.[]; .uid == $old and (.phase == "Succeeded" or .phase == "Failed"))) as $oldTerminal |
+		"\($ownerOK)|\($active | length)|\($terminalOverlap)|\($active[0].uid // "")|\($active[0].ready // false)|\($oldTerminal)",
+		$snapshot
+	'); then
+		last_snapshot='[]'
+		fail 'snapshot is not a sanitized Pod status array'
+	fi
+	{
+		IFS='|' read -r owner_ok active_count terminal_overlap active_uid active_ready old_terminal
+		IFS= read -r snapshot
+	} <<EOF
+$analyzed
+EOF
+	last_snapshot=$snapshot
+	samples=$((samples + 1))
+
+	if [ "$owner_ok" != true ]; then
 		fail 'a matching Pod did not have the exact controller Deployment owner chain'
 	fi
 
-	active=$(printf '%s\n' "$snapshot" | jq -c '[.[] | select(.phase != "Succeeded" and .phase != "Failed")]')
-	active_count=$(printf '%s\n' "$active" | jq 'length')
 	[ "$active_count" -le 1 ] || fail 'more than one exact controller Deployment-owned active Pod was observed'
 	[ "$active_count" -le "$max_active_controllers" ] || max_active_controllers=$active_count
-	if printf '%s\n' "$snapshot" | jq -e '
-		(length > 1) and
-		any(.[]; .phase == "Succeeded" or .phase == "Failed") and
-		any(.[]; .phase != "Succeeded" and .phase != "Failed")
-	' >/dev/null; then
+	if [ "$terminal_overlap" = true ]; then
 		terminal_overlap_samples=$((terminal_overlap_samples + 1))
 	fi
-	active_uid=$(printf '%s\n' "$active" | jq -r 'first.uid // ""')
-	active_ready=$(printf '%s\n' "$active" | jq -r 'first.ready // false')
-	old_terminal=$(printf '%s\n' "$snapshot" | jq -r --arg old "$old_uid" 'any(.[]; .uid == $old and (.phase == "Succeeded" or .phase == "Failed"))')
 
 	case "$state:$active_count" in
 		initial:1)
@@ -102,7 +106,9 @@ while IFS= read -r raw_snapshot; do
 				inferred_zero=true
 				if [ "$active_ready" = true ]; then state=new; else state=starting; fi
 			else
-				fail 'a replacement Pod became active before an explicit zero sample or terminal old-Pod handoff'
+				new_uid=$active_uid
+				unsampled_handoff_observed=true
+				if [ "$active_ready" = true ]; then state=new; else state=starting; fi
 			fi
 			;;
 		old:0) state=zero; explicit_zero_observed=true ;;
@@ -131,8 +137,11 @@ done
 jq -cn --arg old "$old_uid" --arg new "$new_uid" --argjson samples "$samples" \
 	--argjson maxActiveControllers "$max_active_controllers" --argjson terminalOverlapSamples "$terminal_overlap_samples" \
 	--argjson explicitZeroObserved "$explicit_zero_observed" --argjson terminalHandoffObserved "$terminal_handoff_observed" \
-	--argjson inferredZero "$inferred_zero" '
+	--argjson inferredZero "$inferred_zero" --argjson unsampledHandoffObserved "$unsampled_handoff_observed" '
 	{samples:$samples,maxActiveControllers:$maxActiveControllers,terminalOverlapSamples:$terminalOverlapSamples,
 	 explicitZeroObserved:$explicitZeroObserved,terminalHandoffObserved:$terminalHandoffObserved,inferredZero:$inferredZero,
+	 unsampledHandoffObserved:$unsampledHandoffObserved,
 	 oldUID:$old,newUID:$new,
-	 order:(if $explicitZeroObserved then ["old-active","zero-active","new-active-ready"] else ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"] end)}' >"$summary_file"
+	 order:(if $explicitZeroObserved then ["old-active","zero-active","new-active-ready"]
+		elif $terminalHandoffObserved then ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]
+		else ["old-active","unsampled-handoff","new-active-ready"] end)}' >"$summary_file"

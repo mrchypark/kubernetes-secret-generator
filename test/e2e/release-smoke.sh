@@ -490,7 +490,7 @@ observe_v4_recreate_upgrade() {
 	fi
 	recreate_observer_pid=
 	[ "$producer_status" -eq 0 ] || fail 'Recreate observation producer ended before the intentional stop handshake'
-	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxActiveControllers <= 1 and .terminalOverlapSamples >= 0 and .oldUID == $old and .newUID != $old and ((.explicitZeroObserved == true and .terminalHandoffObserved == false and .inferredZero == false and .order == ["old-active","zero-active","new-active-ready"]) or (.explicitZeroObserved == false and .terminalHandoffObserved == true and .inferredZero == true and .order == ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]))' \
+	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxActiveControllers <= 1 and .terminalOverlapSamples >= 0 and .oldUID == $old and .newUID != $old and ((.explicitZeroObserved == true and .terminalHandoffObserved == false and .inferredZero == false and .unsampledHandoffObserved == false and .order == ["old-active","zero-active","new-active-ready"]) or (.explicitZeroObserved == false and .terminalHandoffObserved == true and .inferredZero == true and .unsampledHandoffObserved == false and .order == ["old-active","inferred-zero-by-terminal-handoff","new-active-ready"]) or (.explicitZeroObserved == false and .terminalHandoffObserved == false and .inferredZero == false and .unsampledHandoffObserved == true and .order == ["old-active","unsampled-handoff","new-active-ready"]))' \
 		"$recreate_summary" >/dev/null || fail 'Recreate observation summary is incomplete'
 	assert_single_controller
 	[ "$(secret_hash smoke-string):$(secret_hash smoke-basic):$(secret_hash smoke-ssh):$(secret_hash smoke-annotation)" = "$recreate_secret_fingerprints" ] ||

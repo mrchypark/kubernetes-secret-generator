@@ -116,6 +116,7 @@ grep -F -q 'reject unknown-overlap true' "$recreate_observer_test" || fail 'Unkn
 grep -F -q 'reject wrong-pod-owner true' "$recreate_observer_test" || fail 'wrong Pod owner negative fixture is missing'
 grep -F -q 'reject wrong-deployment-owner true' "$recreate_observer_test" || fail 'wrong Deployment owner negative fixture is missing'
 grep -F -q 'run valid-direct-terminal-handoff true' "$recreate_observer_test" || fail 'direct terminal handoff valid fixture is missing'
+grep -F -q 'run valid-unsampled-handoff true' "$recreate_observer_test" || fail 'unsampled handoff valid fixture is missing'
 "$recreate_observer_test"
 
 producer_line=$(grep -n -F 'recreate_producer_pid=$!' "$release" | cut -d: -f1)
