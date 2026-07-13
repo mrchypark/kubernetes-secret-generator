@@ -101,6 +101,7 @@ run() {
 		DEPLOYMENT_SNAPSHOT_MODE="${DEPLOYMENT_SNAPSHOT_MODE:-stable}" \
 		KUBE_CONTEXT=test CONFIRM_CONTEXT=test EXPECTED_SERVER_URL=https://test.example.invalid \
 		EXPECTED_CA_SHA256="$ca_sha" NAMESPACE=ksg-system RELEASE_NAME=ksg REPORT_FORMAT="${REPORT_FORMAT:-json}" \
+		RAW_V3_MIGRATION="${RAW_V3_MIGRATION:-false}" DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-}" \
 		SCOPE_MODE="${SCOPE_MODE-ownNamespace}" CONFIRMED_SCOPE="${CONFIRMED_SCOPE-ownNamespace}" \
 		SCOPE_NAMESPACES="${SCOPE_NAMESPACES:-}" CONFIRMED_NAMESPACES_SHA256="${CONFIRMED_NAMESPACES_SHA256:-}" \
 		"$repo_root/scripts/preflight-v4.sh"
@@ -108,7 +109,19 @@ run() {
 
 run >"$tmp_dir/report.json"
 [ "$(jq -r '.blockerCount' "$tmp_dir/report.json")" -eq 0 ]
+jq -e '.target.deploymentName == "ksg"' "$tmp_dir/report.json" >/dev/null
 jq -e 'has("migrationApproval") | not' "$tmp_dir/report.json" >/dev/null
+
+if RAW_V3_MIGRATION=true DEPLOYMENT_NAME='' run >"$tmp_dir/raw-missing-deployment.json" 2>/dev/null; then
+	echo 'preflight accepted raw v3 migration without an explicit deployment name' >&2
+	exit 1
+fi
+RAW_V3_MIGRATION=true DEPLOYMENT_NAME=ksg run >"$tmp_dir/raw-deployment.json"
+jq -e '.target.deploymentName == "ksg"' "$tmp_dir/raw-deployment.json" >/dev/null
+if jq -e '.target.deploymentName == "different-deployment"' "$tmp_dir/raw-deployment.json" >/dev/null; then
+	echo 'preflight report matched a different deployment name' >&2
+	exit 1
+fi
 if grep -Eq ' apply | create | delete | patch | replace ' "$log"; then
 	echo 'preflight invoked a mutating kubectl command' >&2
 	exit 1

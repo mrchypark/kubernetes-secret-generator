@@ -25,6 +25,9 @@ if ! ca_data=$(kubectl --context "$KUBE_CONTEXT" config view --minify --raw --fl
 ca_sha=$(printf '%s' "$ca_data" | openssl base64 -d -A | openssl dgst -sha256 -r | awk '{print $1}')
 [ "$ca_sha" = "$EXPECTED_CA_SHA256" ] || fail 'EXPECTED_CA_SHA256 does not match selected context'
 
+if [ "${RAW_V3_MIGRATION:-false}" = true ]; then
+	require DEPLOYMENT_NAME
+fi
 deployment_name=${DEPLOYMENT_NAME:-$RELEASE_NAME}
 report_file=${REPORT_FILE:-}
 report_format=${REPORT_FORMAT:-json}
@@ -93,7 +96,7 @@ kubectl --context "$KUBE_CONTEXT" get secrets -A -o json >"$report_secrets" & re
 report_ok=true
 if ! jq -s --slurpfile baselineResult "$baseline_findings" \
 		--arg context "$KUBE_CONTEXT" --arg server "$server" --arg ca "$ca_sha" \
-		--arg releaseNamespace "$NAMESPACE" --arg releaseName "$RELEASE_NAME" \
+		--arg releaseNamespace "$NAMESPACE" --arg releaseName "$RELEASE_NAME" --arg deploymentName "$deployment_name" \
 		--arg scopeMode "$scope_mode" --arg confirmedScope "$confirmed_scope" \
 		--arg scopeNamespaces "$scope_namespaces" --arg confirmedNamespacesSHA "$confirmed_namespaces_sha" \
 		--arg canonicalNamespacesSHA "$canonical_namespaces_sha" --argjson namespaceInputValid "$namespace_input_valid" '
@@ -213,7 +216,7 @@ if ! jq -s --slurpfile baselineResult "$baseline_findings" \
   {
     schemaVersion:1,
     generatedAt:(now|todateiso8601),
-    target:{context:$context,server:$server,caSHA256:$ca,releaseNamespace:$releaseNamespace,releaseName:$releaseName},
+    target:{context:$context,server:$server,caSHA256:$ca,releaseNamespace:$releaseNamespace,releaseName:$releaseName,deploymentName:$deploymentName},
     deployment:{watchNamespace:$watch,inferredScope:$scope,requestedScope:$scopeMode,confirmedScope:$confirmedScope,confirmedNamespacesSHA256:$confirmedNamespacesSHA},
     crds:[$crds[] | (first(.spec.versions[]? | select(.name=="v1alpha1")) // {}) as $v | {name:.metadata.name,served:($v.served // false),storage:($v.storage // false),hasStatus:(($v.subresources.status // null) != null)}],
     counts:{crds:($crds|length),stringSecrets:($strings|length),basicAuths:($basics|length),sshKeyPairs:($sshs|length),managedSecretCandidates:([$secrets[] as $s | select(((($s.metadata.annotations // {})["secret-generator.v1.mittwald.de/type"] // "") != "") or (($s.metadata.annotations // {}) | has("secret-generator.v1.mittwald.de/autogenerate")) or any($crs[]; . as $c | $c.metadata.namespace == $s.metadata.namespace and $c.metadata.name == $s.metadata.name))]|length)},
