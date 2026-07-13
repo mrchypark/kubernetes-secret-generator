@@ -12,6 +12,8 @@ kubeconfig=$(mktemp "${TMPDIR:-/tmp}/ksg-release-kubeconfig.XXXXXX")
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/ksg-release.XXXXXX")
 created=false
 watchdog=
+recreate_observer_pid=
+recreate_producer_pid=
 started=$(date +%s)
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
@@ -35,6 +37,8 @@ cleanup() {
 	status=$?
 	trap - 0 1 2 15
 	[ -z "$watchdog" ] || kill "$watchdog" 2>/dev/null || true
+	[ -z "$recreate_observer_pid" ] || kill "$recreate_observer_pid" 2>/dev/null || true
+	[ -z "$recreate_producer_pid" ] || kill "$recreate_producer_pid" 2>/dev/null || true
 	if [ "$created" = true ]; then
 		owner=$(k get namespace kube-system -o jsonpath='{.metadata.labels.ksg-test-owner}' 2>/dev/null || true)
 		if [ "$owner" != "$run_id" ]; then
@@ -190,6 +194,16 @@ for name in smoke-string smoke-basic smoke-ssh smoke-annotation; do wait_secret 
 k -n "$namespace" annotate secret smoke-string secret-generator.v1.mittwald.de/secure=yes --overwrite >/dev/null
 [ "$(k -n "$namespace" get secret smoke-string -o jsonpath='{.metadata.annotations.secret-generator\.v1\.mittwald\.de/secure}')" = yes ] || fail 'v3 StringSecret secure provenance marker was not established'
 secret_hash() { k -n "$namespace" get secret "$1" -o json | jq -cS .data | digest; }
+rotation_state_fingerprint() {
+	k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json |
+		jq -cS '[.items[] |
+			select(.metadata.name == "smoke-string" or .metadata.name == "smoke-basic" or .metadata.name == "smoke-ssh" or .metadata.name == "smoke-annotation") |
+			{kind, name:.metadata.name, generation:(.metadata.generation // null),
+			 specRotation:(.spec.rotationInterval // null), forceRegenerate:(.spec.forceRegenerate // null),
+			 status:{observedGeneration:(.status.observedGeneration // null),lastRegeneratedGeneration:(.status.lastRegeneratedGeneration // null),trackingInitialized:(.status.trackingInitialized // null)},
+			 controllerAnnotations:((.metadata.annotations // {}) | with_entries(select(.key | startswith("secretgenerator.mittwald.de/") or startswith("secret-generator.v1.mittwald.de/"))))}]' |
+		digest
+}
 fixture_inventory() {
 	k -n "$namespace" get stringsecrets,basicauths,sshkeypairs,secrets -o json |
 		jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"
@@ -370,6 +384,70 @@ rollback_v3_manager() {
 	assert_single_controller
 }
 
+observe_v4_recreate_upgrade() {
+	old_v4_uid=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json | jq -er 'if (.items | length) == 1 then .items[0].metadata.uid else error("expected one old Pod") end')
+	[ -n "$old_v4_uid" ] || fail 'recorded v4 Pod UID is empty before Recreate upgrade'
+	[ "$(k -n "$namespace" get deployment "$deployment" -o jsonpath='{.spec.strategy.type}')" = Recreate ] || fail 'v4-to-v4 upgrade requires the public Recreate Deployment'
+	settling_rotation_state=$(rotation_state_fingerprint)
+	sleep 2
+	[ "$(rotation_state_fingerprint)" = "$settling_rotation_state" ] || fail 'rotation state did not settle before v4-to-v4 Recreate upgrade'
+	recreate_secret_fingerprints="$(secret_hash smoke-string):$(secret_hash smoke-basic):$(secret_hash smoke-ssh):$(secret_hash smoke-annotation)"
+	recreate_rotation_state=$(rotation_state_fingerprint)
+	recreate_ready=$workdir/recreate-observer.ready
+	recreate_stop=$workdir/recreate-observer.stop
+	recreate_summary=$workdir/recreate-observation.json
+	recreate_fifo=$workdir/recreate-observer.fifo
+	mkfifo "$recreate_fifo"
+	(
+		while :; do
+			k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json |
+				jq -cS '[.items[].metadata.uid] | sort'
+			[ ! -e "$recreate_stop" ] || break
+			sleep 0.1
+		done
+	) >"$recreate_fifo" &
+	recreate_producer_pid=$!
+	OLD_UID="$old_v4_uid" READY_FILE="$recreate_ready" SUMMARY_FILE="$recreate_summary" STOP_FILE="$recreate_stop" \
+		"$repo_root/test/e2e/recreate-observer.sh" <"$recreate_fifo" &
+	recreate_observer_pid=$!
+	i=0
+	while [ "$i" -lt 100 ] && [ ! -e "$recreate_ready" ]; do
+		kill -0 "$recreate_observer_pid" 2>/dev/null || fail 'Recreate observer exited before recording the old Pod UID'
+		sleep 0.1
+		i=$((i + 1))
+	done
+	[ -e "$recreate_ready" ] || fail 'Recreate observer did not record the old Pod UID before upgrade'
+	if ! helm upgrade "$release" "$CHART_TGZ" --kubeconfig "$kubeconfig" --kube-context "$context" \
+		--namespace "$namespace" --skip-crds --reuse-values \
+		--set terminationGracePeriodSeconds=31 --wait --timeout 180s >/dev/null; then
+		: >"$recreate_stop"
+		wait "$recreate_producer_pid" 2>/dev/null || true
+		wait "$recreate_observer_pid" 2>/dev/null || true
+		recreate_producer_pid=
+		recreate_observer_pid=
+		fail 'public v4 Recreate upgrade failed'
+	fi
+	new_v4_pod=$(k -n "$namespace" get pods -l app.kubernetes.io/instance="$release" -o json |
+		jq -er 'if (.items | length) == 1 then .items[0].metadata.name else error("expected one replacement Pod") end')
+	k -n "$namespace" wait --for=condition=Ready --timeout=60s "pod/$new_v4_pod" >/dev/null
+	: >"$recreate_stop"
+	producer_status=0
+	wait "$recreate_producer_pid" || producer_status=$?
+	recreate_producer_pid=
+	if ! wait "$recreate_observer_pid"; then
+		recreate_observer_pid=
+		fail 'Recreate observer rejected the live Pod UID sequence'
+	fi
+	recreate_observer_pid=
+	[ "$producer_status" -eq 0 ] || fail 'Recreate observation producer ended before the intentional stop handshake'
+	jq -e --arg old "$old_v4_uid" '.samples >= 3 and .maxPods <= 1 and .zeroObserved == true and .oldUID == $old and .newUID != $old and .order == ["old","zero","new"]' \
+		"$recreate_summary" >/dev/null || fail 'Recreate observation summary is incomplete'
+	assert_single_controller
+	[ "$(secret_hash smoke-string):$(secret_hash smoke-basic):$(secret_hash smoke-ssh):$(secret_hash smoke-annotation)" = "$recreate_secret_fingerprints" ] ||
+		fail 'v4-to-v4 Recreate upgrade rotated a credential'
+	[ "$(rotation_state_fingerprint)" = "$recreate_rotation_state" ] || fail 'v4-to-v4 Recreate upgrade changed rotation state'
+}
+
 assert_controller_health() {
 	assert_single_controller
 	k -n "$namespace" wait --for=condition=Available deployment/"$deployment" --timeout=10s >/dev/null
@@ -459,6 +537,8 @@ done
 assert_owners
 [ "$(secret_hash smoke-string)$(secret_hash smoke-basic)$(secret_hash smoke-ssh)$(secret_hash smoke-annotation)" = "$string_hash$basic_hash$ssh_hash$annotation_hash" ] || fail 'v4 re-upgrade rotated a credential'
 
+observe_v4_recreate_upgrade
+
 health_checks=0
 observation_started=$(date +%s)
 while :; do
@@ -476,6 +556,6 @@ done
 
 elapsed=$(( $(date +%s) - started ))
 observation_elapsed=$(( $(date +%s) - observation_started ))
-jq -cn --arg chart "$chart_digest" --arg candidate "$candidate_digest" --arg v3 "$v3_digest" \
+jq -cn --arg chart "$chart_digest" --arg candidate "$candidate_digest" --arg v3 "$v3_digest" --slurpfile recreate "$recreate_summary" \
 	--argjson elapsed "$elapsed" --argjson observation "$observation_elapsed" --argjson checks "$health_checks" \
-	'{status:"passed",objects:{customResources:3,managedSecrets:4},durationSeconds:$elapsed,observationSeconds:$observation,healthChecks:$checks,controller:{ready:true,restarts:0,panicOrOOM:false,recovered:true},digests:{chart:$chart,candidate:$candidate,v3Compatibility:$v3}}'
+	'{status:"passed",objects:{customResources:3,managedSecrets:4},durationSeconds:$elapsed,observationSeconds:$observation,healthChecks:$checks,controller:{ready:true,restarts:0,panicOrOOM:false,recovered:true},recreateObservation:$recreate[0],digests:{chart:$chart,candidate:$candidate,v3Compatibility:$v3}}'

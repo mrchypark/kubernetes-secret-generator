@@ -46,7 +46,10 @@ review warnings for stale keys or labels and record the disposition without copy
   minutes. It checks Ready state, restart/fatal errors, owner conflicts, unexpected
   rotations, and basic create/reconcile behavior throughout its candidate phases. Each
   v3/v4 transition must observe Pod zero before replacement and never more than one active
-  controller Pod.
+  controller Pod. It also performs a real v4-to-v4 public-chart upgrade that changes only
+  the Pod template termination grace period. An observer with a 100 ms polling delay requires
+  the old Pod UID, Pod zero, and then one different Ready UID in that order while Secret and
+  rotation state fingerprints remain unchanged.
 - Build the arm64 image and run its startup path, for example
   `docker run --rm --platform linux/arm64 IMAGE@DIGEST --help`. This is a build/startup
   check, not real-arm64 production certification.
