@@ -38,6 +38,7 @@ promotion_rebuild() { awk '{print} /scripts\/validate-release.sh/{print "       
 missing_release_notes() { sed -i.bak 's/ --generate-notes//' "$1/.github/workflows/release-promote.yml"; }
 force_conflicts() { printf '\nkubectl apply --server-side --force-conflicts\n' >>"$1/scripts/helm-release.sh"; }
 raw_diagnostics_upload() { sed -i.bak 's#path: ${{ steps.scan_failure_diagnostics.outputs.path }}#path: preflight-report.md#' "$1/.github/workflows/release-candidate.yml"; }
+early_replacement() { awk 'NR == 2 { print "kubectl replace --field-manager kubernetes-secret-generator-crd-manager --filename unsafe.json" } { print }' "$1/scripts/helm-release.sh" >"$1/unsafe.tmp" && mv "$1/unsafe.tmp" "$1/scripts/helm-release.sh"; }
 
 reject extra-workflow extra_workflow
 reject unpinned-action unpinned_action
@@ -50,5 +51,6 @@ reject promotion-rebuild promotion_rebuild
 reject missing-release-notes missing_release_notes
 reject force-conflicts force_conflicts
 reject raw-diagnostics-upload raw_diagnostics_upload
+reject early-replacement early_replacement
 
 echo 'supply-chain static negative fixtures passed'

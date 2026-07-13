@@ -25,6 +25,9 @@ for crd in "$chart"/crds/*_crd.yaml; do
 done
 grep -F -q 'chartVersion: {{ .Chart.Version | quote }}' "$chart/templates/crd-lifecycle-owner.yaml" || fail 'lifecycle owner does not persist Chart.version'
 grep -F -q 'helm.sh/resource-policy: keep' "$chart/templates/crd-lifecycle-owner.yaml" || fail 'lifecycle owner evidence is not retained on uninstall'
+grep -F -q 'orphanedFluxApprovalRef: {{ .Values.migration.orphanedFluxApprovalRef | quote }}' "$chart/templates/crd-lifecycle-owner.yaml" || fail 'lifecycle owner omits orphaned Flux approval reference'
+grep -F -q 'orphanedFluxApprover: {{ .Values.migration.orphanedFluxApprover | quote }}' "$chart/templates/crd-lifecycle-owner.yaml" || fail 'lifecycle owner omits orphaned Flux approver'
+grep -F -q 'orphanedFluxApprovalReplacementRef: {{ .Values.migration.orphanedFluxApprovalReplacementRef | quote }}' "$chart/templates/crd-lifecycle-owner.yaml" || fail 'lifecycle owner omits orphaned Flux approval replacement audit reference'
 
 render() {
 	profile=$1

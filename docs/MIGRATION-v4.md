@@ -9,6 +9,10 @@ Run `scripts/preflight-v4.sh` before any API mutation. It requires explicit
 SHA-256 confirmation. Set `REPORT_FORMAT=json|markdown`; `REPORT_FILE` is optional and
 must not already exist.
 
+For a raw v3 migration, also set `RAW_V3_MIGRATION=true` and an explicit
+`DEPLOYMENT_NAME`. The report binds that Deployment name and the release wrapper rejects a
+report generated for any other Deployment.
+
 The report inventories:
 
 - exact CR owner identity and same-name Secret presence;

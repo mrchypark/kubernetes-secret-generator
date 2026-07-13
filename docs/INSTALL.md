@@ -2,7 +2,7 @@
 
 ## Support and prerequisites
 
-The `v4.0.0-rc.11` candidate targets Kubernetes 1.34/1.35 APIs, Helm 3.14+, amd64,
+The `v4.0.0-rc.12` candidate targets Kubernetes 1.34/1.35 APIs, Helm 3.14+, amd64,
 and an arm64 image build plus `--help` startup check. These are candidate targets, not an SLA, capacity, HA, or production
 certification. The cluster should enforce Secret at-rest encryption and use a non-default
 namespace.
@@ -25,7 +25,7 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.11
+export CHART_VERSION=4.0.0-rc.12
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -42,15 +42,15 @@ The default `ownNamespace` scope is least privilege. For `namespaces` or `cluste
 
 ## Flux install
 
-Existing Flux installations may use the indexed [Flux example](examples/flux-helmrelease.yaml) as a starting point. Replace its zero Git commit and image digest with the exact candidate; the Git source uses `reconcileStrategy: Revision`. Keep Flux as the sole CRD manager. Flux is optional and its rehearsal is not a universal rc.11 promotion blocker.
+Existing Flux installations may use the indexed [Flux example](examples/flux-helmrelease.yaml) as a starting point. Replace its zero Git commit and image digest with the exact candidate; the Git source uses `reconcileStrategy: Revision`. Keep Flux as the sole CRD manager. Flux is optional and its rehearsal is not a universal rc.12 promotion blocker.
 
-Choose replica and topology settings for the target cluster. The rc.11 release process does
+Choose replica and topology settings for the target cluster. The rc.12 release process does
 not certify HA or make a PDB availability claim.
 
 Commit the reviewed HelmRelease and immutable source revision through the installation's
 normal GitOps process. Verify the three CRDs become `Established` before accepting the
 manager rollout. Do not use direct `kubectl apply` for CRDs in a Flux-managed installation.
-Flux compatibility is documented for existing consumers but is not exercised by the rc.11
+Flux compatibility is documented for existing consumers but is not exercised by the rc.12
 release automation.
 
 ## Uninstall
@@ -72,7 +72,7 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.11
+export CHART_VERSION=4.0.0-rc.12
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export EXPECTED_SERVER_URL='<exact-approved-api-server>'
@@ -94,10 +94,11 @@ export KUBE_CONTEXT=my-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.11
+export CHART_VERSION=4.0.0-rc.12
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export RAW_V3_MIGRATION=true
+export DEPLOYMENT_NAME=kubernetes-secret-generator
 export SCOPE_MODE=cluster CONFIRMED_SCOPE=cluster
 export CONFIRM_LEGACY_CRD_ADOPTION=v3.4.1
 export RAW_V3_PREFLIGHT_REPORT=/absolute/path/to/preflight-report.json
@@ -107,4 +108,8 @@ export EXPECTED_CA_SHA256='<exact-approved-ca-sha256>'
 make install
 ```
 
-The report must be no older than 24 hours and match the current context, server, CA, namespace, and release. The three unmarked CRDs must byte-match the pinned v3.4.1 normalized specs; partial or unknown CRD sets are rejected before write. Immediately before adoption the wrapper reruns preflight and requires exactly the legacy `kubectl-client-side-apply` spec owner plus the `kube-apiserver` status-subresource owner; Flux, unknown managers, and spec ownership outside that tuple fail with a redacted field-path diagnostic. It replaces each exact CRD with its captured UID/resourceVersion so concurrent changes fail, then establishes normal non-forcing SSA ownership. The CRDs are updated in place and retained for manager rollback; marked v4 CRDs and Flux-managed installations never use forced ownership.
+The report must be no older than 24 hours and match the current context, server, CA, namespace, release, and explicit Deployment name. The three unmarked CRDs must byte-match commit `e15976ccd356c260be6e691b4d26d55005800b91`, the original v3.4.1 release-bump CRDs; partial or unknown CRD sets are rejected before write. That CRD provenance is deliberately distinct from the compatibility image tag `v3.4.1` at `b01e37dce377e5e4296392b7e4d823b6830b763e`, which includes the SSH feature merge `ce10a836ad8f2ca7fb303368f8dda70bd9ab24ae`. Immediately before adoption the wrapper reruns preflight and normally requires exactly the legacy `kubectl-client-side-apply` spec owner plus the `kube-apiserver` status-subresource owner. It replaces each exact CRD with its captured UID/resourceVersion so concurrent changes fail, then establishes normal non-forcing SSA ownership. The CRDs are updated in place and retained for manager rollback; marked v4 CRDs never use forced ownership.
+
+An installation left behind by a removed Flux deployment may use `CONFIRM_ORPHANED_FLUX_OWNER='<kustomization-name>/<kustomization-namespace>'`. First obtain confirmation from the GitOps/platform owner that this reconciliation source is permanently decommissioned, then set `CONFIRM_ORPHANED_FLUX_DECOMMISSIONED` to the same exact value. Record an independent non-secret approval reference and approver in `ORPHANED_FLUX_APPROVAL_REF` and `ORPHANED_FLUX_APPROVER`; these are persisted in the lifecycle ConfigMap. Scale the explicitly named legacy Deployment to zero, wait for its Pods to disappear, verify its leader Lease is absent or unowned, and set `CONTROLLER_STOPPED_CONFIRM=true`. This narrow opt-in accepts only the matching Flux owner labels, exact ownership of `spec` and the two owner labels by `kustomize-controller`, and the Kubernetes status tuple. Immediately before mutation it rechecks the stopped Deployment, zero matching Pods, unowned/absent Lease, zero `*.toolkit.fluxcd.io` CRDs, and zero known Flux controller Deployments. Active Flux, extra metadata ownership, a missing or mismatched organizational confirmation, mixed/unknown ownership, or concurrency fails closed. Do not use this escape hatch while Flux is installed.
+
+Ordinary upgrades and reinstalls preserve that lifecycle approval evidence. Replacing or clearing it requires `REPLACE_ORPHANED_FLUX_APPROVAL=true` plus an independent `ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF`; unreviewed mismatches fail before mutation.

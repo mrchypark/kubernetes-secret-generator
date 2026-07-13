@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fixture_dir=$repo_root/test/fixtures/v3.4.1/crds
 source_file=$repo_root/test/fixtures/v3.4.1/SOURCE
+release_lock=$repo_root/test/fixtures/v3.4.1/release-lock.json
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/ksg-n1-fixture.XXXXXX")
 trap 'rm -rf "$tmpdir"' 0 1 2 15
 
@@ -13,9 +14,17 @@ command -v jq >/dev/null 2>&1 || fail 'jq is required'
 command -v openssl >/dev/null 2>&1 || fail 'openssl is required'
 command -v helm >/dev/null 2>&1 || fail 'helm is required'
 
-commit=$(awk -F= '$1 == "commit" { print $2 }' "$source_file")
+commit=$(awk -F= '$1 == "crd.commit" { print $2 }' "$source_file")
 case "$commit" in ????????????????????????????????????????) ;; *) fail 'N-1 fixture source commit is malformed' ;; esac
 git -C "$repo_root" cat-file -e "$commit^{commit}" 2>/dev/null || fail "N-1 source commit $commit is unavailable; fetch pinned history before verification"
+image_tag=$(awk -F= '$1 == "image.tag" { print $2 }' "$source_file")
+image_tag_commit=$(awk -F= '$1 == "image.tagCommit" { print $2 }' "$source_file")
+image_feature_commit=$(awk -F= '$1 == "image.sshFeatureMergeCommit" { print $2 }' "$source_file")
+[ "$(git -C "$repo_root" rev-parse "refs/tags/$image_tag^{commit}")" = "$image_tag_commit" ] || fail 'compatibility image tag provenance is inconsistent'
+git -C "$repo_root" merge-base --is-ancestor "$image_feature_commit" "$image_tag_commit" || fail 'compatibility image feature provenance is inconsistent'
+jq -e --arg crd "$commit" --arg tag "$image_tag" --arg imageCommit "$image_tag_commit" --arg featureCommit "$image_feature_commit" \
+	'.crdSourceCommit == $crd and .compatibilityImageTag == $tag and .compatibilityImageTagCommit == $imageCommit and .compatibilityImageSSHFeatureMergeCommit == $featureCommit' \
+	"$release_lock" >/dev/null || fail 'release lock conflates CRD and compatibility image provenance'
 
 for kind in basicauths sshkeypairs stringsecrets; do
 	fixture=$fixture_dir/secretgenerator.mittwald.de_${kind}_crd.yaml

@@ -27,7 +27,8 @@ export KUBE_CONTEXT=approved-cluster
 export CONFIRM_CONTEXT="$KUBE_CONTEXT"
 export NAMESPACE=secret-generator-system
 export RELEASE_NAME=kubernetes-secret-generator
-export CHART_VERSION=4.0.0-rc.11
+export DEPLOYMENT_NAME=kubernetes-secret-generator
+export CHART_VERSION=4.0.0-rc.12
 export IMAGE_DIGEST='sha256:<verified-64-hex-digest>'
 export CRD_LIFECYCLE_MANAGER=direct
 export SCOPE_MODE=ownNamespace
@@ -42,14 +43,55 @@ make upgrade
 
 When all three installed CRDs are the exact pinned v3.4.1 specs, the wrapper requires this
 fresh zero-blocker report before using a server-side dry-run and scoped ownership takeover.
-It never forces conflicts for marked v4 CRDs, partial sets, unknown schemas, Flux ownership,
+It never forces conflicts for marked v4 CRDs, partial sets, unknown schemas, active Flux ownership,
 or a report for another target. At mutation time it reruns preflight, accepts only the exact
 legacy `kubectl-client-side-apply` spec tuple plus `kube-apiserver` status tuple, and replaces each exact CRD with its captured UID and
 resourceVersion before establishing normal non-forcing SSA ownership. Concurrent changes fail
 the replacement. CRDs are updated in place and retained during manager rollback.
 
+For CRDs orphaned after Flux was completely removed, set
+`CONFIRM_ORPHANED_FLUX_OWNER='<kustomization-name>/<kustomization-namespace>'`. The wrapper
+also requires `CONFIRM_ORPHANED_FLUX_DECOMMISSIONED` to match that exact value after the
+GitOps/platform owner confirms the reconciliation source is permanently decommissioned. It
+requires those exact owner labels and managedFields, then immediately verifies that no Flux
+toolkit CRD or known controller Deployment exists. Normal active Flux remains rejected and
+must remain the sole CRD manager.
+
+Also set independent non-secret `ORPHANED_FLUX_APPROVAL_REF` and
+`ORPHANED_FLUX_APPROVER` values. Scale `DEPLOYMENT_NAME` to zero, wait for zero matching
+Pods and an absent or unowned `kubernetes-secret-generator-lock` Lease, then set
+`CONTROLLER_STOPPED_CONFIRM=true`. The wrapper rechecks all of these immediately before its
+first CRD replacement and persists the approval evidence in the lifecycle owner ConfigMap.
+
+All three targets pass server dry-run before the first write. If a replace conflicts, the
+wrapper refetches managedFields and UID. It retries once with the current resourceVersion only
+when the object is still the exact pinned orphan state; if the first request already produced
+the exact rc12 direct-managed state, it continues to non-forcing SSA. Any changed spec, UID,
+or manager fails closed. Helm is not invoked and the controller must remain stopped.
+
+Never reuse a printed or retained resourceVersion-bound target: the wrapper deletes these
+files on failure. Use the redacted identity/managedFields inventory to review the live state,
+then refetch and revalidate every CRD before generating a new recovery request. After all
+three CRDs converge and become `Established`, verify:
+
+```sh
+kubectl --context "$KUBE_CONTEXT" get crd/basicauths.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.username.type}{"\n"}'
+kubectl --context "$KUBE_CONTEXT" get crd/sshkeypairs.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.algorithm.type}{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.privateKeyField.type}{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.publicKeyField.type}{"\n"}'
+kubectl --context "$KUBE_CONTEXT" get crd/stringsecrets.secretgenerator.mittwald.de -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.fields.type}{"\n"}'
+```
+
+Expected outputs are `string`, `stringstringstring`, and `array`. Only after all three match
+may the operator install v4 or deliberately restart the v3.4.1 manager.
+
+The lifecycle owner ConfigMap preserves `orphanedFluxApprovalRef` and
+`orphanedFluxApprover` automatically on ordinary upgrade or reinstall. To replace or clear
+them, set `REPLACE_ORPHANED_FLUX_APPROVAL=true` and an independent
+`ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF`; supply both new approval fields to replace them or
+leave both unset to clear them. The replacement audit reference is persisted. Any unreviewed
+mismatch is rejected before mutation.
+
 If the installation already uses Flux, keep Flux as the sole CRD manager and update CRDs
-before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.11 release
+before the HelmRelease. A Flux rehearsal is useful but is not a universal rc.12 release
 blocker. Never switch CRD managers during the controller upgrade.
 
 ## Rollback

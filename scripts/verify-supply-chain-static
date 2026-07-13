@@ -88,6 +88,21 @@ if find "$root" -type d \( -name .git -o -name .cache -o -name vendor \) -prune 
 ! grep -E -q '(:latest([^[:alnum:]_.-]|$)|image\.tag=latest)' "$workflows"/*.yml "$root/Makefile" "$root/deploy/helm-chart/kubernetes-secret-generator/values.yaml" || fail 'latest is forbidden in build, publish, and deployment inputs'
 has "$root/scripts/helm-release.sh" 'validate_legacy_preflight'
 has "$root/scripts/helm-release.sh" '.manager == "kubectl-client-side-apply" and .operation == "Update"'
+has "$root/scripts/helm-release.sh" 'CONFIRM_ORPHANED_FLUX_OWNER'
+has "$root/scripts/helm-release.sh" 'CONFIRM_ORPHANED_FLUX_DECOMMISSIONED'
+has "$root/scripts/helm-release.sh" 'ORPHANED_FLUX_APPROVAL_REF'
+has "$root/scripts/helm-release.sh" 'ORPHANED_FLUX_APPROVER'
+has "$root/scripts/helm-release.sh" 'REPLACE_ORPHANED_FLUX_APPROVAL'
+has "$root/scripts/helm-release.sh" 'ORPHANED_FLUX_APPROVAL_REPLACEMENT_REF'
+has "$root/scripts/helm-release.sh" 'CONTROLLER_STOPPED_CONFIRM'
+has "$root/scripts/helm-release.sh" '.manager == "kustomize-controller" and .operation == "Apply"'
+has "$root/scripts/helm-release.sh" 'endswith(".toolkit.fluxcd.io")'
+has "$root/scripts/helm-release.sh" 'get deployments.apps --all-namespaces'
+has "$root/scripts/helm-release.sh" 'get pods --namespace "$NAMESPACE" --selector "$pod_selector"'
+has "$root/scripts/helm-release.sh" 'get lease "$leader_election_id"'
+has "$root/scripts/helm-release.sh" 'recovery inventory (identity only)'
+has "$root/scripts/helm-release.sh" 'discarded all resourceVersion-bound target files'
+has "$root/scripts/helm-release.sh" 'replace_with_revalidation'
 has "$root/scripts/helm-release.sh" '--show-managed-fields=true'
 has "$root/scripts/helm-release.sh" '.manager == "kube-apiserver" and .operation == "Update"'
 has "$root/scripts/helm-release.sh" '.subresource == "status"'
@@ -100,8 +115,18 @@ has "$root/scripts/helm-release.sh" 'replace --dry-run=server --field-manager ku
 has "$root/scripts/helm-release.sh" 'replace --field-manager kubernetes-secret-generator-crd-manager'
 identity_line=$(grep -n -F 'actual_spec_sha=$(jq' "$root/scripts/helm-release.sh" | cut -d: -f1)
 preflight_line=$(grep -n -F 'current_preflight=$tmpdir/current-preflight.json' "$root/scripts/helm-release.sh" | cut -d: -f1)
-replace_line=$(grep -n -F 'replace --field-manager kubernetes-secret-generator-crd-manager' "$root/scripts/helm-release.sh" | cut -d: -f1)
-[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$replace_line" ] || fail 'legacy CRD replacement is not ordered after exact identity and immediate preflight'
+prewrite_dry_run_line=$(grep -n -F 'adoption_failed pre-write-server-dry-run' "$root/scripts/helm-release.sh" | cut -d: -f1)
+replace_lines=$(grep -n -F 'replace --field-manager kubernetes-secret-generator-crd-manager' "$root/scripts/helm-release.sh" | cut -d: -f1)
+[ "$(printf '%s\n' "$identity_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'exact legacy identity gate must occur once'
+[ "$(printf '%s\n' "$preflight_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'immediate preflight gate must occur once'
+[ "$(printf '%s\n' "$prewrite_dry_run_line" | awk 'NF {n++} END {print n+0}')" -eq 1 ] || fail 'all-target pre-write dry-run gate must occur once'
+for replace_line in $replace_lines; do
+	[ "$identity_line" -lt "$preflight_line" ] && [ "$preflight_line" -lt "$prewrite_dry_run_line" ] && [ "$prewrite_dry_run_line" -lt "$replace_line" ] ||
+		fail "legacy CRD replacement at line $replace_line is not ordered after exact identity, immediate preflight, and all-target dry-run"
+done
+retry_dry_run_line=$(grep -n -F 'adoption_failed retry-server-dry-run' "$root/scripts/helm-release.sh" | cut -d: -f1)
+retry_replace_line=$(grep -n -F 'adoption_failed retry-replace' "$root/scripts/helm-release.sh" | cut -d: -f1)
+[ "$retry_dry_run_line" -lt "$retry_replace_line" ] || fail 'retry replacement is not ordered after refreshed target server dry-run'
 for path in "$promote" "$root/scripts/helm-release.sh"; do
 	! grep -F -q -- '--force-conflicts' "$path" || fail '--force-conflicts is forbidden in release mutation paths'
 done

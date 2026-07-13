@@ -7,7 +7,7 @@ controller-gen.version=v0.21.0
 controller-gen.module-sum=h1:KXDQza3bgjlPY6xLR63tI/40gzjhyUAvkCrwzd2/6cs=
 controller-gen.module-zip.sha256=2d4438e9437cf70d60625a19673d63cbfb001b707e4baf602e50734964c97fd7
 crd.v3.4.1.basicauths.spec-sha256=6d90f44c610fe07c51aa729946c8368296d1bfe8bea2bb098cbd85c3a36c59f5
-crd.v3.4.1.sshkeypairs.spec-sha256=2a366ddc189823995403b2fb1b278387a108478686adfde7096586a276b42ddf
+crd.v3.4.1.sshkeypairs.spec-sha256=fd44204099ac052e2518b63cddfb9d677edbb539860463898ec28c267f12eaed
 crd.v3.4.1.stringsecrets.spec-sha256=569acb9a3ff0dac64254fc72dd276b3ae29c7947da92c08120e18ccba8827871
 image.v3.4.1.linux-amd64=ghcr.io/mrchypark/kubernetes-secret-generator:v3.4.1@sha256:be0b248155922366cdfae7282b3f0c9d53291bf47a4309fdff3c6fcd80f17880
 kind.version=v0.31.0

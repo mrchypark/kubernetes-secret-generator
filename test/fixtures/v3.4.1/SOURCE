@@ -1,8 +1,10 @@
-tag=v3.4.1
-commit=b01e37dce377e5e4296392b7e4d823b6830b763e
+crd.commit=e15976ccd356c260be6e691b4d26d55005800b91
+image.tag=v3.4.1
+image.tagCommit=b01e37dce377e5e4296392b7e4d823b6830b763e
+image.sshFeatureMergeCommit=ce10a836ad8f2ca7fb303368f8dda70bd9ab24ae
 paths=deploy/crds/*_crd.yaml
 canonicalization=kubectl-create-dry-run-client-json-piped-to-jq-sort-compact-spec
 normalization=delete-spec-conversion-and-preserveUnknownFields-server-defaults
 blob.basicauths=8e56cf1e4f4696131f34490d984664b0efa8bd42
-blob.sshkeypairs=4f6ec021a73cda3be3766e1655dbea8c08cffd95
+blob.sshkeypairs=ec4d7129d815b3edda8892764f791a4706fa93a3
 blob.stringsecrets=ba27b0362df8b2eb377962c8f9e342ecce86d010
