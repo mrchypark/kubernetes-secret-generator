@@ -124,18 +124,19 @@ k label namespace "$namespace" "ksg-test-owner=$run_id" pod-security.kubernetes.
 kind load docker-image "$v3_local_image" --name "$cluster" >/dev/null
 kind load docker-image "$candidate_local_image" --name "$cluster" >/dev/null
 
-# The original release-bump CRDs predate the later v3.4.1 tag/image commit.
-v3_tree=$workdir/v3
-mkdir "$v3_tree"
-git -C "$repo_root" archive e15976ccd356c260be6e691b4d26d55005800b91 deploy | tar -x -C "$v3_tree"
+# Keep the original release-bump CRDs, but run them with the matching later
+# v3.4.1 chart/runtime commit used to build the locked compatibility image.
+v3_runtime_tree=$workdir/v3-runtime
+mkdir "$v3_runtime_tree"
+git -C "$repo_root" archive b01e37dce377e5e4296392b7e4d823b6830b763e deploy | tar -x -C "$v3_runtime_tree"
 k apply -f "$repo_root/test/fixtures/v3.4.1/crds" >/dev/null
 k wait --for=condition=Established --timeout=60s \
 	crd/basicauths.secretgenerator.mittwald.de \
 	crd/sshkeypairs.secretgenerator.mittwald.de \
 	crd/stringsecrets.secretgenerator.mittwald.de >/dev/null
-if ! helm install "$release" "$v3_tree/deploy/helm-chart/kubernetes-secret-generator" \
+if ! helm install "$release" "$v3_runtime_tree/deploy/helm-chart/kubernetes-secret-generator" \
 	--kubeconfig "$kubeconfig" --kube-context "$context" --namespace "$namespace" \
-	--set installCRDs=true --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
+	--skip-crds --set rbac.clusterRole=false --set-string watchNamespace="$namespace" \
 	--set image.registry= --set image.repository=ksg-release-v3 \
 	--set image.pullPolicy=IfNotPresent \
 	--set-string "image.tag=$run_id" \

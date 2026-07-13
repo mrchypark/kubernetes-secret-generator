@@ -54,6 +54,9 @@ for contract in \
 	'v3 local tag does not match exact v3 image ID' \
 	'kind load docker-image "$v3_local_image"' \
 	'kind load docker-image "$candidate_local_image"' \
+	'git -C "$repo_root" archive b01e37dce377e5e4296392b7e4d823b6830b763e deploy' \
+	'k apply -f "$repo_root/test/fixtures/v3.4.1/crds"' \
+	'--skip-crds --set rbac.clusterRole=false' \
 	'--set-string image.digest=' \
 	'--set image.pullPolicy=IfNotPresent' \
 	'v3_install_diagnostics' \
@@ -81,6 +84,7 @@ for contract in \
 	'BasicAuth self-heal caused an update storm'; do
 	grep -F -q -- "$contract" "$release" || fail "release smoke safety assertion is missing: $contract"
 done
+! grep -F -q -- '--set installCRDs=true' "$release" || fail 'v3 runtime chart must not replace the original e159 CRD fixtures'
 grep -F -q 'jq -cS -f "$repo_root/test/e2e/release-smoke-inventory.jq"' "$release" || fail 'release smoke does not use the managed fixture inventory filter'
 grep -F -q "manager rollback changed managed fixture identity or ownership" "$release" || fail 'release smoke fixture rollback assertion is missing'
 ! grep -F -q 'manager rollback changed object counts' "$release" || fail 'release smoke still counts unrelated namespace objects'
@@ -150,6 +154,42 @@ done
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ksg-kind-guards.XXXXXX")
 trap 'rm -rf "$tmp"' 0 1 2 15
+
+command -v helm >/dev/null 2>&1 || fail 'locked Helm is required to verify the v3 runtime Role'
+locked_helm=$(awk -F= '$1=="helm.version" {print $2}' "$repo_root/tools.lock")
+[ "$(helm version --template '{{.Version}}')" = "$locked_helm" ] || fail "Helm $locked_helm is required to verify the v3 runtime Role"
+v3_runtime_tree=$tmp/v3-runtime
+mkdir "$v3_runtime_tree"
+git -C "$repo_root" archive b01e37dce377e5e4296392b7e4d823b6830b763e deploy | tar -x -C "$v3_runtime_tree"
+for fixture in "$repo_root"/test/fixtures/v3.4.1/crds/*.yaml; do
+	name=$(basename "$fixture")
+	git -C "$repo_root" show "e15976ccd356c260be6e691b4d26d55005800b91:deploy/crds/$name" | cmp -s - "$fixture" ||
+		fail "$name is not the original e159 v3.4.1 CRD fixture"
+done
+helm template ksg-v3-runtime "$v3_runtime_tree/deploy/helm-chart/kubernetes-secret-generator" \
+	--namespace ksg-v3-runtime --set rbac.clusterRole=false --set-string watchNamespace=ksg-v3-runtime \
+	--show-only templates/role.yaml >"$tmp/v3-role.yaml"
+awk '
+	function finish_rule() {
+		if (api && resource && create && get && update && patch) found=1
+		api=resource=create=get=update=patch=0
+	}
+	/^  - apiGroups:$/ { finish_rule(); section="api"; next }
+	/^    resources:$/ { section="resource"; next }
+	/^    verbs:$/ { section="verb"; next }
+	/^      - / {
+		value=$0
+		sub(/^      - /, "", value)
+		if (section == "api" && value == "coordination.k8s.io") api=1
+		if (section == "resource" && value == "leases") resource=1
+		if (section == "verb" && value == "create") create=1
+		if (section == "verb" && value == "get") get=1
+		if (section == "verb" && value == "update") update=1
+		if (section == "verb" && value == "patch") patch=1
+	}
+	END { finish_rule(); exit found ? 0 : 1 }
+' "$tmp/v3-role.yaml" || fail 'rendered b01 v3 Role lacks required coordination.k8s.io Lease permissions'
+
 : >"$tmp/chart.tgz"
 if CHART_TGZ="$tmp/chart.tgz" CANDIDATE_IMAGE=mutable RELEASE_TAG=v4.0.0 "$release" >"$tmp/release.out" 2>&1; then
 	fail 'release smoke accepted a mutable candidate image'
