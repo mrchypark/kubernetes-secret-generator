@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -82,24 +83,28 @@ func (r *ReconcileSSHKeyPair) Reconcile(ctx context.Context, request reconcile.R
 		// if instance is not found don#t requeue and don't return error, else requeue and return error
 		return crd.CheckError(err)
 	}
+	instancePrivateKey, err := resolveSuppliedPrivateKey(instance)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	existing := &v1.Secret{}
 	err = r.client.Get(ctx, request.NamespacedName, existing)
 	// secret not found, create new one
 	if apierrors.IsNotFound(err) {
-		return r.createNewSecret(ctx, instance, reqLogger)
+		return r.createNewSecret(ctx, instance, instancePrivateKey, reqLogger)
 	}
 	// check for other errors
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 
-	return r.updateSecret(ctx, existing, instance, reqLogger)
+	return r.updateSecret(ctx, existing, instance, instancePrivateKey, reqLogger)
 }
 
 // updateSecret attempts to update an existing Secret object with new values. Secret will only be updated,
 // if it is owned by a SSHKeyPair CR.
-func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Secret, instance *v1alpha1.SSHKeyPair, reqLogger logr.Logger) (reconcile.Result, error) {
+func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Secret, instance *v1alpha1.SSHKeyPair, instancePrivateKey []byte, reqLogger logr.Logger) (reconcile.Result, error) {
 	// Check if Secret is owned by SSHKeyPair cr, otherwise do nothing
 	existingOwnerRefs := existing.OwnerReferences
 
@@ -111,7 +116,6 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	data := instance.Spec.Data
-	instancePrivateKey := instance.Spec.PrivateKey
 	privateKeyField := instance.GetPrivateKeyField()
 	publicKeyField := instance.GetPublicKeyField()
 
@@ -131,28 +135,28 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	keyRegenerate := regenerate || rotate
 	restoredSuppliedPrivateKey := false
 	if len(existingPrivateKey) == 0 && len(existingPublicKey) > 0 && !keyRegenerate {
-		if instancePrivateKey == "" {
+		if len(instancePrivateKey) == 0 {
 			return reconcile.Result{}, fmt.Errorf("cannot restore missing SSH private key without replacing the existing public key")
 		}
-		candidate := map[string][]byte{privateKeyField: []byte(instancePrivateKey)}
+		candidate := map[string][]byte{privateKeyField: instancePrivateKey}
 		if err := secret.CheckAndRegenPublicKey(candidate, nil, candidate[privateKeyField], publicKeyField); err != nil {
-			return reconcile.Result{}, fmt.Errorf("derive public key from supplied privateKey: %w", err)
+			return reconcile.Result{}, fmt.Errorf("derive public key from supplied private key: %w", err)
 		}
 		if !bytes.Equal(candidate[publicKeyField], existingPublicKey) {
-			return reconcile.Result{}, fmt.Errorf("supplied privateKey does not match the existing public key")
+			return reconcile.Result{}, fmt.Errorf("supplied private key does not match the existing public key")
 		}
-		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
+		targetSecret.Data[privateKeyField] = append([]byte(nil), instancePrivateKey...)
 		restoredSuppliedPrivateKey = true
 	}
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if !restoredSuppliedPrivateKey && len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
-		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
+		targetSecret.Data[privateKeyField] = append([]byte(nil), instancePrivateKey...)
 		delete(targetSecret.Data, publicKeyField)
 		keyRegenerate = false
 	}
 
-	crd.UpdateData(data, targetSecret, regenerate)
+	crd.UpdateData(sshLiteralData(data, len(instancePrivateKey) > 0, privateKeyField, publicKeyField), targetSecret, regenerate)
 
 	err = secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, keyRegenerate, targetSecret.Data)
 	if err != nil {
@@ -171,14 +175,13 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 // createNewSecret creates a new ssh key pair from the provided values. The Secret's owner will be set
 // as the SSHKeyPair that is being reconciled and a reference to the Secret will be stored in
 // the CR's status
-func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1alpha1.SSHKeyPair, reqLogger logr.Logger) (reconcile.Result, error) {
+func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1alpha1.SSHKeyPair, instancePrivateKey []byte, reqLogger logr.Logger) (reconcile.Result, error) {
 	values := make(map[string][]byte)
 
 	// get config values from instance
 	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
 	data := instance.Spec.Data
-	instancePrivateKey := []byte(instance.Spec.PrivateKey)
 	privateKeyField := instance.GetPrivateKeyField()
 	publicKeyField := instance.GetPublicKeyField()
 	rotationSecret := &v1.Secret{}
@@ -187,11 +190,11 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 		return reconcile.Result{}, err
 	}
 
-	for key := range data {
-		values[key] = []byte(data[key])
+	for key, value := range sshLiteralData(data, len(instancePrivateKey) > 0, privateKeyField, publicKeyField) {
+		values[key] = []byte(value)
 	}
 
-	values[privateKeyField] = instancePrivateKey
+	values[privateKeyField] = append([]byte(nil), instancePrivateKey...)
 
 	err = secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, false, values)
 	if err != nil {
@@ -208,8 +211,40 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 }
 
 func (r *ReconcileSSHKeyPair) scheduleRotation(instance *v1alpha1.SSHKeyPair, target *v1.Secret) (reconcile.Result, bool, error) {
-	if instance.Spec.RotationInterval != "" && instance.Spec.PrivateKey != "" {
-		return reconcile.Result{}, false, fmt.Errorf("rotationInterval cannot be used with a supplied privateKey")
+	if instance.Spec.RotationInterval != "" && (instance.Spec.PrivateKey != "" || instance.Spec.Ed25519Seed != "") {
+		return reconcile.Result{}, false, fmt.Errorf("rotationInterval cannot be used with a supplied private key source")
 	}
 	return crd.ScheduleRotation(instance.Spec.RotationInterval, target, r.now())
+}
+
+func resolveSuppliedPrivateKey(instance *v1alpha1.SSHKeyPair) ([]byte, error) {
+	if instance.Spec.PrivateKey != "" && instance.Spec.Ed25519Seed != "" {
+		return nil, fmt.Errorf("privateKey and ed25519Seed are mutually exclusive")
+	}
+	if instance.Spec.Ed25519Seed == "" {
+		return []byte(instance.Spec.PrivateKey), nil
+	}
+	algorithm := strings.ToLower(strings.TrimSpace(instance.Spec.Algorithm))
+	if algorithm != "" && algorithm != secret.SSHKeyAlgorithmED25519 {
+		return nil, fmt.Errorf("ed25519Seed requires algorithm ed25519 or an empty algorithm")
+	}
+	privateKey, err := secret.PEMPrivateKeyFromEd25519Seed(instance.Spec.Ed25519Seed)
+	if err != nil {
+		return nil, err
+	}
+	return privateKey, nil
+}
+
+func sshLiteralData(data map[string]string, suppliedKeySource bool, privateKeyField, publicKeyField string) map[string]string {
+	if !suppliedKeySource {
+		return data
+	}
+	filtered := make(map[string]string, len(data))
+	for key, value := range data {
+		if key == privateKeyField || key == publicKeyField {
+			continue
+		}
+		filtered[key] = value
+	}
+	return filtered
 }

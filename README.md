@@ -223,7 +223,7 @@ data:
 The operator supports three kinds of custom resources: `StringSecret`, `SSHKeyPair` and `BasicAuth`. These crs can be used to trigger creation, update and deletion of desired secrets.
 All crs support the field `spec.type` which can be used to define the kubernetes type of the generated `Secret`, e.g. "Opaque"
 
-Starting with v3.5.0, all three resources accept an optional `spec.rotationInterval` using Go duration syntax, for example `24h`. The default is empty, which disables scheduled rotation. Valid intervals range from `1m` to `8760h`. Enabling rotation records an anchor on the generated `Secret` without rotating immediately; generated credentials rotate once when the interval becomes due. Literal `spec.data` entries and unrelated Secret data are preserved. Rotation cannot be combined with `SSHKeyPair.spec.privateKey`, and a `StringSecret` needs at least one entry in `spec.fields`.
+Starting with v3.5.0, all three resources accept an optional `spec.rotationInterval` using Go duration syntax, for example `24h`. The default is empty, which disables scheduled rotation. Valid intervals range from `1m` to `8760h`. Enabling rotation records an anchor on the generated `Secret` without rotating immediately; generated credentials rotate once when the interval becomes due. Literal `spec.data` entries and unrelated Secret data are preserved. Rotation cannot be combined with an `SSHKeyPair` supplied key source, and a `StringSecret` needs at least one entry in `spec.fields`.
 
 Owned Secret deletion and missing or empty managed literal/generated keys are repaired additively. Nonempty changed values are intentionally preserved. See [rotation details](docs/ROTATION.md).
 
@@ -258,24 +258,20 @@ If the target `Secret` already exists and is not owned by a `StringSecret` resou
 
 ### SSH Key Pair via SSHKeyPair-CR
 
-A `SSHKeyPair` resource can be used to generate an ssh key pair. It supports `spec.algorithm`, `spec.length`, `spec.data` and `spec.forceRegenerate` similar to `StringSecret` resources.
-Supported algorithms are `rsa` (default), `ecdsa` and `ed25519`. For RSA, `spec.length` is interpreted as bits.
-For ECDSA, supported lengths are `256`, `384` and `521`. Ed25519 ignores `spec.length`.
-The field `spec.privateKey` can be used to specify a private key, which will be used during runtime to regenerate a matching public key.
-Updating is handled similar to `StringSecret` resources, unowned `Secrets` are not modified, and existing fields are only updated if regeneration is forced. However, should the public key be missing, the operator will attempt to regenerate it.
+A namespaced `SSHKeyPair` creates an owned, same-name `Secret`. It can generate a random RSA, ECDSA, or Ed25519 key pair, derive a public key from `spec.privateKey`, or deterministically derive an Ed25519 pair from `spec.ed25519Seed`.
 
 ```yaml
-apiVersion: "secretgenerator.mittwald.de/v1alpha1"
-kind: "SSHKeyPair"
+apiVersion: secretgenerator.mittwald.de/v1alpha1
+kind: SSHKeyPair
 metadata:
-  name: "example-ssh"
-  namespace: "default"
+  name: example-ssh
+  namespace: default
 spec:
-  algorithm: "ed25519"
-  forceRegenerate: false
-  data:
-    example: "data"
+  algorithm: ed25519
+  type: kubernetes.io/ssh-auth
 ```
+
+For deterministic seed usage, field defaults, repair behavior, security guidance, and upgrade instructions, see [Using SSHKeyPair resources](docs/SSHKEYPAIR.md).
 
 ### Ingress Basic Auth via BasicAuth-CR
 

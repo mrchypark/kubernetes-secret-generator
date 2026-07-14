@@ -3,6 +3,7 @@
 ## 3.5.0
 
 - Add default-off `spec.rotationInterval` to `StringSecret`, `BasicAuth`, and `SSHKeyPair`.
+- Accept an optional canonical base64 Ed25519 seed as an alternative supplied `SSHKeyPair` key source.
 - Recreate deleted owned Secrets and additively repair missing or empty managed literal/generated keys.
 - Preserve nonempty changed values, literal data, unrelated keys, type, labels, and ownership.
 - Add multi-architecture signed images, SPDX SBOMs, vulnerability scanning, pinned container bases, and restricted Helm security defaults.

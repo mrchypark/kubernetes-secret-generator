@@ -9,17 +9,19 @@ import (
 	"testing"
 )
 
-func TestCRDsOnlyAddRotationIntervalToV341(t *testing.T) {
+func TestCRDsOnlyAddDocumentedPropertiesToV341(t *testing.T) {
 	t.Parallel()
 
 	const rotationProperty = "              rotationInterval:\n                type: string\n"
+	const seedProperty = "              ed25519Seed:\n                maxLength: 44\n                type: string\n"
 	tests := []struct {
 		filename string
 		baseline string
+		added    []string
 	}{
-		{"secretgenerator.mittwald.de_basicauths_crd.yaml", "16be3509de5a80b15c63dad80cc96e6ebf935dd16accbd499591f047f1ed8870"},
-		{"secretgenerator.mittwald.de_sshkeypairs_crd.yaml", "6c072fead6b5151e4151afd46839410ec9cd50a870c38d861f5a52ab08a8ddd6"},
-		{"secretgenerator.mittwald.de_stringsecrets_crd.yaml", "58b0ec00d2802a180a39722e196aaf2accaaccbec7513b06cd2703786c2e8843"},
+		{"secretgenerator.mittwald.de_basicauths_crd.yaml", "16be3509de5a80b15c63dad80cc96e6ebf935dd16accbd499591f047f1ed8870", []string{rotationProperty}},
+		{"secretgenerator.mittwald.de_sshkeypairs_crd.yaml", "6c072fead6b5151e4151afd46839410ec9cd50a870c38d861f5a52ab08a8ddd6", []string{seedProperty, rotationProperty}},
+		{"secretgenerator.mittwald.de_stringsecrets_crd.yaml", "58b0ec00d2802a180a39722e196aaf2accaaccbec7513b06cd2703786c2e8843", []string{rotationProperty}},
 	}
 
 	for _, tt := range tests {
@@ -29,14 +31,16 @@ func TestCRDsOnlyAddRotationIntervalToV341(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := bytes.Count(crd, []byte(rotationProperty)); got != 1 {
-				t.Fatalf("rotationInterval property count = %d, want 1", got)
+			withoutAdditions := crd
+			for _, property := range tt.added {
+				if got := bytes.Count(withoutAdditions, []byte(property)); got != 1 {
+					t.Fatalf("added property count = %d, want 1", got)
+				}
+				withoutAdditions = bytes.Replace(withoutAdditions, []byte(property), nil, 1)
 			}
-
-			withoutRotation := bytes.Replace(crd, []byte(rotationProperty), nil, 1)
-			got := fmt.Sprintf("%x", sha256.Sum256(withoutRotation))
+			got := fmt.Sprintf("%x", sha256.Sum256(withoutAdditions))
 			if got != tt.baseline {
-				t.Fatalf("CRD differs from v3.4.1 beyond rotationInterval: got sha256 %s, want %s", got, tt.baseline)
+				t.Fatalf("CRD differs from v3.4.1 beyond documented additions: got sha256 %s, want %s", got, tt.baseline)
 			}
 		})
 	}

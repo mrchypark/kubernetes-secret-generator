@@ -18,6 +18,9 @@ type SSHKeyPairSpec struct {
 	// +optional
 	PrivateKey string `json:"privateKey,omitempty"`
 	// +optional
+	// +kubebuilder:validation:MaxLength=44
+	Ed25519Seed string `json:"ed25519Seed,omitempty"`
+	// +optional
 	PrivateKeyField string `json:"privateKeyField,omitempty"`
 	// +optional
 	PublicKeyField string `json:"publicKeyField,omitempty"`

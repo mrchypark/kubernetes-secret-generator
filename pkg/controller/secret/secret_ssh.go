@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -212,6 +213,22 @@ func pemBytesForPrivateKey(key interface{}) ([]byte, error) {
 	}
 
 	return privateKeyBytes.Bytes(), nil
+}
+
+// PEMPrivateKeyFromEd25519Seed converts a canonical padded standard-base64
+// Ed25519 seed into the same PKCS#8 PEM format used by generated keys.
+func PEMPrivateKeyFromEd25519Seed(encodedSeed string) ([]byte, error) {
+	if len(encodedSeed) != base64.StdEncoding.EncodedLen(ed25519.SeedSize) {
+		return nil, fmt.Errorf("ed25519Seed must be exactly %d base64 characters", base64.StdEncoding.EncodedLen(ed25519.SeedSize))
+	}
+	seed, err := base64.StdEncoding.Strict().DecodeString(encodedSeed)
+	if err != nil || base64.StdEncoding.EncodeToString(seed) != encodedSeed {
+		return nil, errors.New("ed25519Seed must be canonical padded standard base64")
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("ed25519Seed must decode to exactly %d bytes", ed25519.SeedSize)
+	}
+	return pemBytesForPrivateKey(ed25519.NewKeyFromSeed(seed))
 }
 
 func rawPrivateKeyFromPEM(pemKey []byte) (interface{}, error) {
