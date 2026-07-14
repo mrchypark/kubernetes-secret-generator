@@ -1,0 +1,118 @@
+name: Tag release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/mrchypark/kubernetes-secret-generator
+  KUBECONFIG: /tmp/ksg-release-kubeconfig
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.5
+
+      - name: Install pinned verification tools
+        run: |
+          curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64
+          echo 'eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa  kind' | sha256sum -c -
+          sudo install kind /usr/local/bin/kind
+          curl -fsSLo helm.tgz https://get.helm.sh/helm-v3.21.3-linux-amd64.tar.gz
+          echo '15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0  helm.tgz' | sha256sum -c -
+          tar -xzf helm.tgz
+          sudo install linux-amd64/helm /usr/local/bin/helm
+
+      - name: Verify tag before publishing
+        run: |
+          kind create cluster --name ksg-release --image kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f --kubeconfig "$KUBECONFIG" --wait 90s
+          kubectl apply -f deploy/crds/
+          go test -count=1 ./...
+          helm lint deploy/helm-chart/kubernetes-secret-generator
+          helm template release deploy/helm-chart/kubernetes-secret-generator >/dev/null
+
+      - name: Delete verification cluster
+        if: always()
+        run: kind delete cluster --name ksg-release
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push release image
+        id: image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: build/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            REVISION=${{ github.sha }}
+          provenance: false
+
+      - name: Scan exact digest and create SPDX SBOMs
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          echo "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          echo "$DIGEST" >image-digest.txt
+          for arch in amd64 arm64; do
+            docker run --rm -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+              anchore/grype:v0.104.1@sha256:e7d3cb36d2ebfb522141d83a5d0df9cda301f7e9f8747ee4af41f12c478fa77c \
+              "$IMAGE_NAME@$DIGEST" --platform "linux/$arch" --fail-on high
+            docker run --rm -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+              anchore/syft:v1.33.0@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357 \
+              "$IMAGE_NAME@$DIGEST" --platform "linux/$arch" -o spdx-json >"sbom-$arch.spdx.json"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Sign and verify exact digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$GITHUB_REF_NAME"
+          cosign sign --yes "$IMAGE_NAME@$DIGEST"
+          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$IMAGE_NAME@$DIGEST" >signature-verification.json
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: |
+            image-digest.txt
+            sbom-amd64.spdx.json
+            sbom-arm64.spdx.json
+            signature-verification.json
+          if-no-files-found: error
+          retention-days: 90

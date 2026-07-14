@@ -1,23 +1,34 @@
-{{- if and .Values.rbac.create (eq .Values.scope.mode "cluster") }}
-apiVersion: rbac.authorization.k8s.io/v1
+{{- if and .Values.rbac.create .Values.rbac.clusterRole -}}
 kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "kubernetes-secret-generator.rbacName" . }}-access
+  name: "mittwald:{{ include "kubernetes-secret-generator.serviceAccountName" . }}"
   labels:
-    {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
+  {{ include "kubernetes-secret-generator.labels" . | nindent 4 }}
 rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-  {{- if .Values.crdControllers.enabled }}
-  - apiGroups: ["secretgenerator.mittwald.de"]
-    resources: ["basicauths", "sshkeypairs", "stringsecrets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["secretgenerator.mittwald.de"]
-    resources: ["basicauths/status", "sshkeypairs/status", "stringsecrets/status"]
-    verbs: ["get", "update", "patch"]
-  {{- end }}
-{{- end }}
+  # actual operator functionality
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - list
+      - watch
+      - update
+  - apiGroups:
+        - secretgenerator.mittwald.de
+    resources:
+      - basicauths
+      - basicauths/status
+      - sshkeypairs
+      - sshkeypairs/status
+      - stringsecrets
+      - stringsecrets/status
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+{{- end -}}

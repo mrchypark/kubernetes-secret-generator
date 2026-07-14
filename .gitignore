@@ -1,7 +1,6 @@
 # Temporary Build Files
 build/_output
 build/_test
-/.cache/
 # Created by https://www.gitignore.io/api/go,vim,emacs,visualstudiocode
 ### Emacs ###
 # -*- mode: gitignore; -*-
@@ -80,3 +79,4 @@ tags
 .idea
 vendor
 bin
+.cache/

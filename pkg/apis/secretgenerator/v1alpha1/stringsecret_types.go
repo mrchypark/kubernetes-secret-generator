@@ -1,50 +1,35 @@
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // StringSecretSpec defines the desired state of StringSecret
-// +kubebuilder:validation:XValidation:rule="(has(self.data) && size(self.data) > 0) || (has(self.fields) && size(self.fields) > 0)",message="at least one of data or fields must be non-empty"
-// +kubebuilder:validation:XValidation:rule="!has(self.fields) || self.fields.all(f, self.fields.filter(other, other.fieldName == f.fieldName).size() == 1)",message="fieldName values must be unique"
-// +kubebuilder:validation:XValidation:rule="!has(self.data) || !has(self.fields) || self.fields.all(f, !(f.fieldName in self.data))",message="generated fieldName values must not collide with data keys"
-// +kubebuilder:validation:XValidation:rule="(has(self.data) ? size(self.data) : 0) + (has(self.fields) ? size(self.fields) : 0) <= 256",message="data and fields may manage at most 256 keys"
-// +kubebuilder:validation:XValidation:rule="(has(oldSelf.type) && oldSelf.type.size() > 0 ? oldSelf.type : 'Opaque') == (has(self.type) && self.type.size() > 0 ? self.type : 'Opaque')",message="type is immutable after creation; omitted, empty, and Opaque are equivalent"
-// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (duration(self.rotationInterval) >= duration('1m') && duration(self.rotationInterval) <= duration('8760h'))",message="rotationInterval must be a Go duration between 1m and 8760h"
-// +kubebuilder:validation:XValidation:rule="!has(self.rotationInterval) || self.rotationInterval.size() == 0 || (has(self.fields) && self.fields.size() > 0)",message="rotationInterval requires at least one generated field"
 type StringSecretSpec struct {
 	// +optional
 	Type string `json:"type,omitempty"`
 	// +optional
-	// +kubebuilder:validation:MaxProperties=256
-	// +kubebuilder:validation:XValidation:rule="self.all(k, k.size() <= 253 && k.matches('^[A-Za-z0-9._-]+$'))",message="data keys must be 1..253 characters and contain only letters, digits, dot, underscore, or hyphen"
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
-	// RotationInterval periodically rotates generated fields. It uses Go duration
-	// syntax; an empty value disables periodic rotation.
 	// +optional
-	// +kubebuilder:validation:MaxLength=32
-	RotationInterval string `json:"rotationInterval,omitempty"`
-	// +optional
-	// +kubebuilder:validation:MaxItems=64
-	Fields []Field `json:"fields,omitempty"`
+	RotationInterval string  `json:"rotationInterval,omitempty"`
+	Fields           []Field `json:"fields"`
 }
 
 type Field struct {
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9._-]+$`
-	FieldName string `json:"fieldName"`
-	// +optional
-	// +kubebuilder:validation:Enum=base64;base64url;base32;hex;raw
-	Encoding string `json:"encoding,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Pattern=`^(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-6])[bB]?$`
-	Length string `json:"length,omitempty"`
+	FieldName string `json:"fieldName,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
+	Length    string `json:"length,omitempty"`
 }
 
 // StringSecretStatus defines the observed state of StringSecret
 type StringSecretStatus struct {
-	CommonSecretStatus `json:",inline"`
+	Secret *v1.ObjectReference `json:"secret,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -52,7 +37,6 @@ type StringSecretStatus struct {
 // StringSecret is the Schema for the stringsecrets API
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=stringsecrets,scope=Namespaced
-// +kubebuilder:metadata:annotations="secretgenerator.mittwald.de/schema-release=v4.0.0"
 type StringSecret struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -91,4 +75,12 @@ func (in *StringSecret) GetStatus() SecretStatus {
 
 func (in *StringSecret) GetType() string {
 	return in.Spec.Type
+}
+
+func (in *StringSecretStatus) GetSecret() *v1.ObjectReference {
+	return in.Secret
+}
+
+func (in *StringSecretStatus) SetSecret(secret *v1.ObjectReference) {
+	in.Secret = secret
 }

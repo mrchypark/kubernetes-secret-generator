@@ -1,51 +1,48 @@
-{{- include "kubernetes-secret-generator.validate" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "kubernetes-secret-generator.fullname" . }}
   labels:
-    {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
+  {{- include "kubernetes-secret-generator.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  revisionHistoryLimit: 3
   selector:
     matchLabels:
-      {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 6 }}
+  {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 6 }}
   strategy:
-    type: Recreate
+    type: {{ .Values.deploymentStrategy }}
   template:
     metadata:
       labels:
-        {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 8 }}
+    {{- include "kubernetes-secret-generator.selectorLabels" . | nindent 8 }}
     spec:
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
-      serviceAccountName: {{ include "kubernetes-secret-generator.serviceAccountName" . }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- include "kubernetes-secret-generator.imagePullSecrets" . | nindent 6 }}
-      {{- with .Values.priorityClassName }}
-      priorityClassName: {{ . | quote }}
+      {{- if hasKey .Values "automountServiceAccountToken" }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
       {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName | quote}}
+      {{- end }}
+      {{- include "kubernetes-secret-generator.images.pullSecrets" (dict "images" (list .Values.image) "global" .Values.global) | nindent 6 }}
+      serviceAccountName: {{ include "kubernetes-secret-generator.serviceAccountName" . }}
+      securityContext:
+      {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: {{ .Chart.Name }}
-          image: {{ include "kubernetes-secret-generator.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- toYaml .Values.securityContext | nindent 12 }}
+          image: {{ include "kubernetes-secret-generator.images.image" (dict "root" . "Values" .Values.image)}}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             {{- $args := .Values.args }}
-            {{- if not .Values.crdControllers.enabled }}
-            {{- $args = append $args "--disable-crd-support" }}
+            {{- if not .Values.installCRDs }}
+              {{- $args = append $args "--disable-crd-support" }}
             {{- end }}
             {{- toYaml $args | nindent 12 }}
           ports:
-            - name: healthcheck
-              containerPort: 8080
-              protocol: TCP
-            - name: metrics
-              containerPort: 8383
-              protocol: TCP
+            - containerPort: 8080
+              name: healthcheck
+            - containerPort: 8383
+              name: metrics
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
@@ -70,32 +67,34 @@ spec:
           {{- end }}
           env:
             - name: WATCH_NAMESPACE
-              value: {{ include "kubernetes-secret-generator.watchNamespace" . | quote }}
+              value: {{ template "kubernetes-secret-generator.watchNamespace" . }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "kubernetes-secret-generator"
             - name: REGENERATE_INSECURE
-              value: {{ .Values.regenerateInsecure | toString | quote }}
+              value: {{ .Values.regenerateInsecure | quote }}
             - name: SECRET_LENGTH
               value: {{ .Values.secretLength | quote }}
             - name: SSH_KEY_ALGORITHM
               value: {{ .Values.sshKeyAlgorithm | quote }}
+            - name: USE_METRICS_SERVICE
+              value: {{ .Values.useMetricsService | quote }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          {{- with .Values.volumeMounts }}
-          volumeMounts:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
+      {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts: {{ .Values.volumeMounts | toYaml | nindent 12 }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
-        {{- toYaml . | nindent 8 }}
+      {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+      {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.volumes }}
-      volumes:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+  {{- toYaml . | nindent 8 }}
+  {{- end }}
+      volumes: {{ .Values.volumes | toYaml | nindent 8 }}

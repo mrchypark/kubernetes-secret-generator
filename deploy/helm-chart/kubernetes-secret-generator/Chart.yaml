@@ -4,6 +4,6 @@ description: Controller for automatically creating random secret values
 
 type: application
 
-version: 4.0.0-rc.17
+version: 3.5.0
 
-appVersion: v4.0.0-rc.17
+appVersion: v3.5.0

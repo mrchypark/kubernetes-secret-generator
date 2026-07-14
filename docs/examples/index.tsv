@@ -1,4 +1,0 @@
-docs/examples/annotation-string-secret.yaml	kubernetes-admission
-docs/examples/flux-helmrelease.yaml	flux
-docs/examples/production-values.yaml	helm-values
-docs/examples/stringsecret.yaml	kubernetes-admission

@@ -169,12 +169,12 @@ func TestControllerRegenerateSSHSecret(t *testing.T) {
 	newPrivateKey := string(outNew.Data[secret.DefaultSecretFieldPrivateKey])
 	newPublicKey := string(outNew.Data[secret.DefaultSecretFieldPublicKey])
 
-	if oldPrivateKey != newPrivateKey {
-		t.Errorf("secret regenerated more than once in the same generation")
+	if oldPrivateKey == newPrivateKey {
+		t.Errorf("secret has not been updated")
 	}
 
-	if oldPublicKey != newPublicKey {
-		t.Errorf("secret regenerated more than once in the same generation")
+	if oldPublicKey == newPublicKey {
+		t.Errorf("secret has not been updated")
 	}
 }
 

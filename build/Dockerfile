@@ -1,4 +1,4 @@
-# Multi-architecture indexes, pinned on 2026-07-11.
+# Multi-architecture build with immutable base images.
 FROM --platform=$BUILDPLATFORM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed53c355c899582bbb2113 AS builder
 
 WORKDIR /workdir

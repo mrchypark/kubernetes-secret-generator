@@ -1,53 +1,25 @@
-# Credential rotation runbook
+# Secret rotation in 3.5
 
-Any generated-value drift, owned Secret deletion, approved regeneration, scheduled rotation, or approved legacy reapply creates new credential material. The controller updates Kubernetes Secret state; it does not reload applications or restore a prior random value.
-
-## Scheduled rotation
-
-`StringSecret`, `BasicAuth`, and `SSHKeyPair` can rotate generated credentials after an elapsed interval:
+`StringSecret`, `BasicAuth`, and `SSHKeyPair` accept an optional `spec.rotationInterval`. It uses Go duration syntax and must be between `1m` and `8760h`.
 
 ```yaml
 spec:
   rotationInterval: 24h
 ```
 
-The value uses Go duration syntax and must be from `1m` through `8760h`, inclusive. Empty or omitted disables scheduled rotation. It is an elapsed interval, not a cron schedule, and is unavailable for annotation-managed Secrets.
+The default is empty, so upgrading does not rotate existing credentials. On first enable, the controller writes the RFC3339Nano annotation `secretgenerator.mittwald.de/rotation-anchor` to the owned Secret and schedules the next reconcile. It does not rotate immediately. When due, it rotates generated credentials once and moves the anchor to the current time; missed intervals are coalesced into that one rotation. Changing the interval keeps the anchor, and removing the interval removes only the anchor.
 
-Enabling it on an existing CR starts the interval without rotating immediately. Disabling and later re-enabling starts a fresh interval. Changing an enabled interval retains the current schedule anchor: shortening it may make one rotation immediately due, while lengthening it postpones the next rotation. If downtime spans several intervals, reconciliation performs one rotation, not one per missed interval.
+Rotation preserves literal `spec.data`, unrelated data, type, labels, and ownership. It rejects invalid durations before changing credentials. `StringSecret` rotation requires a generated field, and `SSHKeyPair` rotation cannot be combined with a supplied `spec.privateKey` or `spec.ed25519Seed`.
 
-Each successful generated credential replacement restarts the interval. This includes scheduled or forced rotation, generated-value drift repair, and a generation-setting change that replaces credentials. A literal or label-only update does not restart it. Secret and schedule tracking are committed together, so a controller restart or status retry does not cause an extra rotation.
+The owned-Secret watch is deliberately additive: deletion and missing or empty managed literal/generated keys trigger repair, while nonempty changed values are left untouched. `forceRegenerate` keeps its existing 3.4 behavior.
 
-Scheduled rotation is invalid for a `StringSecret` with no generated `spec.fields`, or for an `SSHKeyPair` with a supplied `spec.privateKey`. When an immutable Secret becomes due, the controller reports `ImmutableSecretConflict` and leaves its data unchanged.
+## Upgrade from 3.4
 
-## Before rotation
-
-1. Record the exact CR/Secret identity, owner UID, consumer inventory, maintenance window, and change decision without reading or copying Secret values.
-2. Confirm the object is `Ready=True`, tracking is complete, and no ownership or immutable conflict exists.
-3. Verify an encrypted backup and restore rehearsal exists when rollback to the prior credential is required.
-4. Choose the smallest rotation: one String field, one CR generation, or one object. Never rotate every namespace with `--all` in an ordinary change.
-
-## Manual trigger
-
-For a CR, patch `forceRegenerate` in a new generation. `true` rotates once for that generation; a retry or controller restart does not rotate again.
+Apply the updated CRDs before upgrading the chart because Helm does not upgrade CRDs already installed from a chart's `crds/` directory:
 
 ```sh
-kubectl --context "$KUBE_CONTEXT" -n "$WORKLOAD_NAMESPACE" patch stringsecret "$NAME" \
-  --type=merge -p '{"spec":{"forceRegenerate":true}}'
+kubectl apply -f deploy/crds/
+helm upgrade kubernetes-secret-generator deploy/helm-chart/kubernetes-secret-generator
 ```
 
-After success, return the desired spec to false. That spec update does not itself rotate.
-
-For annotation-managed String fields, select exact generated fields; use `yes` only when all fields must rotate:
-
-```sh
-kubectl --context "$KUBE_CONTEXT" -n "$WORKLOAD_NAMESPACE" annotate secret "$NAME" \
-  secret-generator.v1.mittwald.de/regenerate=password --overwrite
-```
-
-BasicAuth and SSH do not support selective regeneration. Their value must be `true` or `yes`.
-
-## Consumer rollout and verification
-
-Wait for `Ready=True` and a single expected rotation outcome. Use each application's documented reload mechanism; restart a Deployment/StatefulSet only when it cannot reload mounted/projected credentials. Verify authentication end-to-end without placing credentials in command arguments, rollout annotations, logs, or tickets.
-
-Stop and investigate on repeated rotation events, unexpected Secret resourceVersion changes, consumer authentication failure, owner conflict, or controller error storm. Removing the trigger does not restore the previous value. Restore the encrypted backup when the prior credential is required, then re-run in-memory equality and consumer tests from [BACKUP-RESTORE.md](BACKUP-RESTORE.md).
+No offline migration is required. Existing CRs and Secrets remain in place, and rotation stays disabled unless configured.

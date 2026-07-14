@@ -8,10 +8,12 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"golang.org/x/crypto/ssh"
@@ -36,15 +38,10 @@ type SSHKeypairGenerator struct {
 }
 
 func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.Result, error) {
-	regenerate := false
-	regenerateRequested := false
-	if value, ok := instance.Annotations[AnnotationSecretRegenerate]; ok {
-		regenerateRequested = true
-		fields, err := ParseRegenerate(value, []string{DefaultSecretFieldPrivateKey, DefaultSecretFieldPublicKey}, false)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		regenerate = len(fields) > 0
+	regenerate := instance.Annotations[AnnotationSecretRegenerate] != ""
+
+	if regenerate {
+		delete(instance.Annotations, AnnotationSecretRegenerate)
 	}
 
 	length, err := GetLengthFromAnnotation(SSHKeyLength(), instance.Annotations)
@@ -77,27 +74,10 @@ func (sg SSHKeypairGenerator) generateData(instance *corev1.Secret) (reconcile.R
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	if err := ValidateSSHFields(privateKeyField, publicKeyField, nil); err != nil {
-		return reconcile.Result{}, err
-	}
-	algorithm, expectedLength, err := ValidateSSHConfiguration(algorithm, length)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	projected, err := SSHProjectedValueLengths(algorithm, expectedLength, privateKeyField, publicKeyField, regenerate, instance.Data)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if err := ValidateProjectedDataSize(instance, projected); err != nil {
-		return reconcile.Result{}, err
-	}
 
 	err = GenerateSSHKeypairDataWithAlgorithm(sg.log, algorithm, length, privateKeyField, publicKeyField, regenerate, instance.Data)
 	if err != nil {
-		return reconcile.Result{}, err
-	}
-	if regenerateRequested {
-		delete(instance.Annotations, AnnotationSecretRegenerate)
+		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	return reconcile.Result{}, nil
@@ -111,22 +91,11 @@ func GenerateSSHKeypairData(logger logr.Logger, length string, privateKeyField s
 }
 
 func GenerateSSHKeypairDataWithAlgorithm(logger logr.Logger, algorithm, length string, privateKeyField string, publicKeyField string, regenerate bool, data map[string][]byte) error {
-	algorithm, expectedLength, err := ValidateSSHConfiguration(algorithm, length)
-	if err != nil {
-		return err
-	}
-	if err := ValidateSSHFields(privateKeyField, publicKeyField, nil); err != nil {
-		return err
-	}
 	privateKey := data[privateKeyField]
 	publicKey := data[publicKeyField]
 
 	if len(privateKey) > 0 && !regenerate {
-		key, err := ValidateSSHPrivateKey(privateKey, algorithm, expectedLength)
-		if err != nil {
-			return err
-		}
-		return checkAndRepairPublicKey(data, publicKey, key, publicKeyField)
+		return CheckAndRegenPublicKey(data, publicKey, privateKey, publicKeyField)
 	}
 
 	key, err := generateNewPrivateKey(algorithm, length, logger)
@@ -141,95 +110,35 @@ func normalizeSSHKeyAlgorithm(algorithm string) string {
 	return strings.ToLower(strings.TrimSpace(algorithm))
 }
 
-// ValidateSSHConfiguration normalizes and validates the complete algorithm /
-// strength matrix before any key generation is attempted.
-func ValidateSSHConfiguration(algorithm, length string) (string, int, error) {
+// generateNewPrivateKey parses the given length and generates a matching private key
+func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interface{}, error) {
 	algorithm = normalizeSSHKeyAlgorithm(algorithm)
 	if algorithm == "" {
 		algorithm = normalizeSSHKeyAlgorithm(SSHKeyAlgorithm())
 	}
-	if algorithm == SSHKeyAlgorithmED25519 {
-		return algorithm, 0, nil
-	}
-	fallback := SSHKeyLength()
-	if algorithm == SSHKeyAlgorithmECDSA {
-		fallback = 256
-	}
-	parsed, isByte, err := ParseByteLength(fallback, length)
-	if err != nil {
-		return "", 0, err
-	}
-	if isByte {
-		return "", 0, validationError("ssh key length", "B suffix is not supported; specify strength in bits")
-	}
+
 	switch algorithm {
 	case SSHKeyAlgorithmRSA:
-		if parsed != 2048 && parsed != 3072 && parsed != 4096 {
-			return "", 0, validationError("ssh key length", "RSA strength must be 2048, 3072, or 4096 bits")
-		}
-	case SSHKeyAlgorithmECDSA:
-		if parsed != 256 && parsed != 384 && parsed != 521 {
-			return "", 0, validationError("ssh key length", "ECDSA strength must be 256, 384, or 521 bits")
-		}
-	default:
-		return "", 0, validationError("ssh key algorithm", "unsupported value %q", algorithm)
-	}
-	return algorithm, parsed, nil
-}
-
-func ValidateSSHFields(privateKeyField, publicKeyField string, literal map[string][]byte) error {
-	if err := ValidateFieldName(privateKeyField); err != nil {
-		return err
-	}
-	if err := ValidateFieldName(publicKeyField); err != nil {
-		return err
-	}
-	if privateKeyField == publicKeyField {
-		return validationError("ssh key fields", "private and public key fields must differ")
-	}
-	for _, field := range []string{privateKeyField, publicKeyField} {
-		if _, ok := literal[field]; ok {
-			return validationError("data", "field %q collides with an SSH key field", field)
-		}
-	}
-	return nil
-}
-
-func SSHProjectedValueLengths(algorithm string, expectedLength int, privateKeyField, publicKeyField string, regenerate bool, data map[string][]byte) (map[string]int, error) {
-	if privateKey := data[privateKeyField]; len(privateKey) > 0 && !regenerate {
-		key, err := ValidateSSHPrivateKey(privateKey, algorithm, expectedLength)
+		parsedLen, isByte, err := ParseByteLength(SSHKeyLength(), length)
 		if err != nil {
+			logger.Error(err, "could not parse length for new rsa key")
+
 			return nil, err
 		}
-		publicKey, err := SSHPublicKeyForPrivateKey(key)
-		if err != nil {
-			return nil, err
+		if isByte {
+			parsedLen *= 8
 		}
-		return map[string]int{privateKeyField: len(privateKey), publicKeyField: len(publicKey)}, nil
-	}
-
-	privateMax, publicMax := 512, 512
-	switch algorithm {
-	case SSHKeyAlgorithmRSA:
-		privateMax, publicMax = expectedLength, expectedLength/4
-	case SSHKeyAlgorithmECDSA:
-		privateMax, publicMax = expectedLength*2, expectedLength*2
-	}
-	return map[string]int{privateKeyField: privateMax, publicKeyField: publicMax}, nil
-}
-
-// generateNewPrivateKey parses the given length and generates a matching private key
-func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interface{}, error) {
-	_ = logger
-	algorithm, parsedLen, err := ValidateSSHConfiguration(algorithm, length)
-	if err != nil {
-		return nil, err
-	}
-
-	switch algorithm {
-	case SSHKeyAlgorithmRSA:
 		return rsa.GenerateKey(rand.Reader, parsedLen)
 	case SSHKeyAlgorithmECDSA:
+		parsedLen, isByte, err := ParseByteLength(256, length)
+		if err != nil {
+			logger.Error(err, "could not parse length for new ecdsa key")
+
+			return nil, err
+		}
+		if isByte {
+			parsedLen *= 8
+		}
 		curve, err := ecdsaCurve(parsedLen)
 		if err != nil {
 			return nil, err
@@ -238,8 +147,9 @@ func generateNewPrivateKey(algorithm, length string, logger logr.Logger) (interf
 	case SSHKeyAlgorithmED25519:
 		_, key, err := ed25519.GenerateKey(rand.Reader)
 		return key, err
+	default:
+		return nil, fmt.Errorf("unsupported ssh key algorithm %q", algorithm)
 	}
-	return nil, validationError("ssh key algorithm", "unsupported value %q", algorithm)
 }
 
 // generateKeysHelper generates the public key from the given private key and stores the result in data
@@ -267,7 +177,7 @@ func ecdsaCurve(length int) (elliptic.Curve, error) {
 		return elliptic.P256(), nil
 	case 384:
 		return elliptic.P384(), nil
-	case 521:
+	case 521, 528:
 		return elliptic.P521(), nil
 	default:
 		return nil, fmt.Errorf("unsupported ecdsa key length %d", length)
@@ -305,52 +215,24 @@ func pemBytesForPrivateKey(key interface{}) ([]byte, error) {
 	return privateKeyBytes.Bytes(), nil
 }
 
-func rawPrivateKeyFromPEM(pemKey []byte) (interface{}, error) {
-	if len(pemKey) == 0 || len(pemKey) > MaxPrivateKeyPEMBytes {
-		return nil, validationError("private key", "PEM size must be between 1 and %d bytes", MaxPrivateKeyPEMBytes)
+// PEMPrivateKeyFromEd25519Seed converts a canonical padded standard-base64
+// Ed25519 seed into the same PKCS#8 PEM format used by generated keys.
+func PEMPrivateKeyFromEd25519Seed(encodedSeed string) ([]byte, error) {
+	if len(encodedSeed) != base64.StdEncoding.EncodedLen(ed25519.SeedSize) {
+		return nil, fmt.Errorf("ed25519Seed must be exactly %d base64 characters", base64.StdEncoding.EncodedLen(ed25519.SeedSize))
 	}
-	return ssh.ParseRawPrivateKey(pemKey)
+	seed, err := base64.StdEncoding.Strict().DecodeString(encodedSeed)
+	if err != nil || base64.StdEncoding.EncodeToString(seed) != encodedSeed {
+		return nil, errors.New("ed25519Seed must be canonical padded standard base64")
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("ed25519Seed must decode to exactly %d bytes", ed25519.SeedSize)
+	}
+	return pemBytesForPrivateKey(ed25519.NewKeyFromSeed(seed))
 }
 
-// ValidateSSHPrivateKey validates supplied PEM type and strength against the
-// desired matrix and returns the parsed key for public-key derivation.
-func ValidateSSHPrivateKey(pemKey []byte, algorithm string, expectedLength int) (interface{}, error) {
-	key, err := rawPrivateKeyFromPEM(pemKey)
-	if err != nil {
-		return nil, validationError("private key", "cannot parse PEM: %v", err)
-	}
-	switch algorithm {
-	case SSHKeyAlgorithmRSA:
-		privateKey, ok := key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, validationError("private key", "type %T does not match RSA", key)
-		}
-		if err := privateKey.Validate(); err != nil {
-			return nil, validationError("private key", "invalid RSA key: %v", err)
-		}
-		bits := privateKey.N.BitLen()
-		if (bits != 2048 && bits != 3072 && bits != 4096) || bits != expectedLength {
-			return nil, validationError("private key", "RSA strength %d does not match required %d", bits, expectedLength)
-		}
-	case SSHKeyAlgorithmECDSA:
-		privateKey, ok := key.(*ecdsa.PrivateKey)
-		if !ok {
-			return nil, validationError("private key", "type %T does not match ECDSA", key)
-		}
-		bits := privateKey.Curve.Params().BitSize
-		if (bits != 256 && bits != 384 && bits != 521) || bits != expectedLength {
-			return nil, validationError("private key", "ECDSA strength %d does not match required %d", bits, expectedLength)
-		}
-	case SSHKeyAlgorithmED25519:
-		switch key.(type) {
-		case ed25519.PrivateKey, *ed25519.PrivateKey:
-		default:
-			return nil, validationError("private key", "type %T does not match Ed25519", key)
-		}
-	default:
-		return nil, validationError("ssh key algorithm", "unsupported value %q", algorithm)
-	}
-	return key, nil
+func rawPrivateKeyFromPEM(pemKey []byte) (interface{}, error) {
+	return ssh.ParseRawPrivateKey(pemKey)
 }
 
 func PrivateKeyFromPEM(pemKey []byte) (*rsa.PrivateKey, error) {
@@ -378,21 +260,20 @@ func SSHPublicKeyForPrivateKey(privateKey interface{}) ([]byte, error) {
 // CheckAndRegenPublicKey checks if the specified public key has length > 0 and regenerates it from the given private key
 // otherwise. The result is written into data
 func CheckAndRegenPublicKey(data map[string][]byte, publicKey, privateKey []byte, publicKeyField string) error {
+	if len(publicKey) > 0 {
+		return nil
+	}
+
+	// restore public key if private key exists
 	key, err := rawPrivateKeyFromPEM(privateKey)
 	if err != nil {
 		return err
 	}
-	return checkAndRepairPublicKey(data, publicKey, key, publicKeyField)
-}
-
-func checkAndRepairPublicKey(data map[string][]byte, publicKey []byte, privateKey interface{}, publicKeyField string) error {
-	want, err := SSHPublicKeyForPrivateKey(privateKey)
+	publicKey, err = SSHPublicKeyForPrivateKey(key)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(publicKey, want) {
-		data[publicKeyField] = want
-	}
+	data[publicKeyField] = publicKey
 
 	return nil
 }

@@ -1,1 +1,0 @@
-{{ required "input is required" .Values.input | fromYaml | toJson }}
