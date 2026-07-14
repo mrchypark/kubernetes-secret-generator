@@ -112,15 +112,22 @@ func RepairBasicAuthData(logger logr.Logger, cons *BasicAuthConstraints, data ma
 
 	pending := make(map[string][]byte)
 	if len(username) == 0 {
-		parsedUsername, hash, ok := bytes.Cut(auth, []byte(":"))
-		if !ok || len(parsedUsername) == 0 || len(hash) == 0 {
-			return fmt.Errorf("cannot restore basic-auth username from malformed auth field")
+		if len(auth) == 0 {
+			username = []byte(cons.Username)
+			if len(username) == 0 {
+				username = []byte("admin")
+			}
+		} else {
+			parsedUsername, hash, ok := bytes.Cut(auth, []byte(":"))
+			if !ok || len(parsedUsername) == 0 || len(hash) == 0 {
+				return fmt.Errorf("cannot restore basic-auth username from malformed auth field")
+			}
+			if err := bcrypt.CompareHashAndPassword(hash, password); err != nil {
+				return fmt.Errorf("cannot restore basic-auth username from inconsistent auth and password: %w", err)
+			}
+			username = parsedUsername
 		}
-		if err := bcrypt.CompareHashAndPassword(hash, password); err != nil {
-			return fmt.Errorf("cannot restore basic-auth username from inconsistent auth and password: %w", err)
-		}
-		pending[FieldBasicAuthUsername] = append([]byte(nil), parsedUsername...)
-		username = parsedUsername
+		pending[FieldBasicAuthUsername] = append([]byte(nil), username...)
 	}
 
 	if len(auth) == 0 {

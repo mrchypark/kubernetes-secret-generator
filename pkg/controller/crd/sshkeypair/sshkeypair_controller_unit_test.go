@@ -3,6 +3,7 @@ package sshkeypair
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -139,6 +140,72 @@ func TestPartialSSHKeyRepair(t *testing.T) {
 			}
 			if len(before.Data[secret.SecretFieldPrivateKey]) > 0 && !bytes.Equal(got.Data[secret.SecretFieldPrivateKey], before.Data[secret.SecretFieldPrivateKey]) {
 				t.Fatal("existing private key changed")
+			}
+		})
+	}
+}
+
+func TestSuppliedPrivateKeyRepairPreservesExistingPublicKey(t *testing.T) {
+	matching := make(map[string][]byte)
+	other := make(map[string][]byte)
+	for _, data := range []map[string][]byte{matching, other} {
+		if err := secret.GenerateSSHKeypairDataWithAlgorithm(log, secret.SSHKeyAlgorithmED25519, "", secret.SecretFieldPrivateKey, secret.SecretFieldPublicKey, true, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name       string
+		emptyField bool
+		privateKey []byte
+		wantErr    bool
+	}{
+		{"matching missing private", false, matching[secret.SecretFieldPrivateKey], false},
+		{"matching empty private", true, matching[secret.SecretFieldPrivateKey], false},
+		{"mismatched missing private", false, other[secret.SecretFieldPrivateKey], true},
+		{"mismatched empty private", true, other[secret.SecretFieldPrivateKey], true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := true
+			cr := &v1alpha1.SSHKeyPair{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.SchemeGroupVersion.String(), Kind: Kind},
+				ObjectMeta: metav1.ObjectMeta{Name: "supplied", Namespace: "default", UID: "owner-uid"},
+				Spec:       v1alpha1.SSHKeyPairSpec{PrivateKey: string(tt.privateKey), Algorithm: secret.SSHKeyAlgorithmED25519},
+			}
+			data := map[string][]byte{secret.SecretFieldPublicKey: bytes.Clone(matching[secret.SecretFieldPublicKey]), "unmanaged": []byte("keep")}
+			if tt.emptyField {
+				data[secret.SecretFieldPrivateKey] = nil
+			}
+			existing := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "supplied", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: Kind, Controller: &controller}}},
+				Data:       data,
+			}
+			before := existing.DeepCopy()
+			c, scheme := sshClient(t, cr, existing)
+			r := &ReconcileSSHKeyPair{client: c, scheme: scheme, now: time.Now}
+			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Reconcile() error = nil, want error")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+
+			got := &corev1.Secret{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), got); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantErr {
+				if !reflect.DeepEqual(got.Data, before.Data) {
+					t.Fatal("mismatched supplied private key mutated Secret data")
+				}
+				return
+			}
+			if !bytes.Equal(got.Data[secret.SecretFieldPrivateKey], tt.privateKey) || !bytes.Equal(got.Data[secret.SecretFieldPublicKey], before.Data[secret.SecretFieldPublicKey]) {
+				t.Fatal("matching private key was not restored without changing public key")
 			}
 		})
 	}

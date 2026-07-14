@@ -1,6 +1,7 @@
 package sshkeypair
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -128,12 +129,24 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	regenerate := instance.Spec.ForceRegenerate
 
 	keyRegenerate := regenerate || rotate
+	restoredSuppliedPrivateKey := false
 	if len(existingPrivateKey) == 0 && len(existingPublicKey) > 0 && !keyRegenerate {
-		return reconcile.Result{}, fmt.Errorf("cannot restore missing SSH private key without replacing the existing public key")
+		if instancePrivateKey == "" {
+			return reconcile.Result{}, fmt.Errorf("cannot restore missing SSH private key without replacing the existing public key")
+		}
+		candidate := map[string][]byte{privateKeyField: []byte(instancePrivateKey)}
+		if err := secret.CheckAndRegenPublicKey(candidate, nil, candidate[privateKeyField], publicKeyField); err != nil {
+			return reconcile.Result{}, fmt.Errorf("derive public key from supplied privateKey: %w", err)
+		}
+		if !bytes.Equal(candidate[publicKeyField], existingPublicKey) {
+			return reconcile.Result{}, fmt.Errorf("supplied privateKey does not match the existing public key")
+		}
+		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
+		restoredSuppliedPrivateKey = true
 	}
 
 	// if regeneration is forced or existing private key is empty use private key from spec
-	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
+	if !restoredSuppliedPrivateKey && len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
 		targetSecret.Data[privateKeyField] = []byte(instancePrivateKey)
 		delete(targetSecret.Data, publicKeyField)
 		keyRegenerate = false

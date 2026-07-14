@@ -79,6 +79,26 @@ func TestRepairPartialBasicAuthData(t *testing.T) {
 		})
 	}
 
+	for _, state := range []string{"missing", "empty"} {
+		t.Run("auth and username "+state, func(t *testing.T) {
+			data := map[string][]byte{secret.FieldBasicAuthPassword: bytes.Clone(password)}
+			if state == "empty" {
+				data[secret.FieldBasicAuthIngress] = nil
+				data[secret.FieldBasicAuthUsername] = nil
+			}
+			if err := secret.RepairBasicAuthData(log, &secret.BasicAuthConstraints{Username: "admin"}, data); err != nil {
+				t.Fatal(err)
+			}
+			parsedUser, parsedHash, ok := bytes.Cut(data[secret.FieldBasicAuthIngress], []byte(":"))
+			if !ok || string(parsedUser) != "admin" || string(data[secret.FieldBasicAuthUsername]) != "admin" || !bytes.Equal(data[secret.FieldBasicAuthPassword], password) {
+				t.Fatal("auth and username were not safely restored")
+			}
+			if err := bcrypt.CompareHashAndPassword(parsedHash, password); err != nil {
+				t.Fatal("restored auth does not match preserved password")
+			}
+		})
+	}
+
 	t.Run("inconsistent auth and password does not mutate", func(t *testing.T) {
 		data := map[string][]byte{secret.FieldBasicAuthIngress: bytes.Clone(auth), secret.FieldBasicAuthPassword: []byte("different")}
 		before := cloneByteMap(data)
