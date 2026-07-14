@@ -2,6 +2,7 @@ package stringsecret
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -33,7 +34,7 @@ func Add(mgr manager.Manager) error {
 
 // NewReconciler returns a new reconcile.Reconciler
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileStringSecret{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileStringSecret{client: mgr.GetClient(), scheme: mgr.GetScheme(), now: time.Now}
 }
 
 type ReconcileStringSecret struct {
@@ -41,6 +42,7 @@ type ReconcileStringSecret struct {
 	// that reads objects from the cache and writes to the apiserver
 	client client.Client
 	scheme *runtime.Scheme
+	now    func() time.Time
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -55,7 +57,6 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -105,19 +106,27 @@ func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1al
 	data := instance.Spec.Data
 
 	targetSecret := existing.DeepCopy()
+	rotationResult, rotate, err := r.scheduleRotation(instance, targetSecret)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	// update data values from spec
-	crd.UpdateData(data, targetSecret, regenerate)
+	crd.UpdateData(data, targetSecret, instance.Spec.ForceRegenerate)
 
 	// Generate values from fields property
-	err := setValuesForFields(reqLogger, fields, regenerate, targetSecret.Data)
+	err = setValuesForFields(reqLogger, fields, regenerate || rotate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	c := crd.Client{Client: r.client}
 
-	return c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	result, err := c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
 }
 
 // createNewSecret creates a new string secret from the provided values. The Secret's owner will be set
@@ -126,6 +135,11 @@ func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1al
 func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v1alpha1.StringSecret, reqLogger logr.Logger) (reconcile.Result, error) {
 	fields := instance.Spec.Fields
 	data := instance.Spec.Data
+	rotationSecret := &v1.Secret{}
+	rotationResult, _, err := r.scheduleRotation(instance, rotationSecret)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	values := make(map[string][]byte)
 
@@ -134,14 +148,25 @@ func (r *ReconcileStringSecret) createNewSecret(ctx context.Context, instance *v
 	}
 
 	// generate values from fields property
-	err := setValuesForFields(reqLogger, fields, true, values)
+	err = setValuesForFields(reqLogger, fields, true, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	c := crd.Client{Client: r.client}
 
-	return c.ClientCreateSecret(ctx, values, instance, r.scheme)
+	result, err := c.ClientCreateSecretWithAnnotations(ctx, values, rotationSecret.Annotations, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
+}
+
+func (r *ReconcileStringSecret) scheduleRotation(instance *v1alpha1.StringSecret, target *v1.Secret) (reconcile.Result, bool, error) {
+	if instance.Spec.RotationInterval != "" && len(instance.Spec.Fields) == 0 {
+		return reconcile.Result{}, false, fmt.Errorf("rotationInterval requires at least one generated field")
+	}
+	return crd.ScheduleRotation(instance.Spec.RotationInterval, target, r.now())
 }
 
 // setValuesForFields iterates over the given list of Fields and generates new random strings if the corresponding entry is empty or

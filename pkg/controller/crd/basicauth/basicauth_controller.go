@@ -34,7 +34,7 @@ func Add(mgr manager.Manager) error {
 
 // NewReconciler returns a new reconcile.Reconciler
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileBasicAuth{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileBasicAuth{client: mgr.GetClient(), scheme: mgr.GetScheme(), now: time.Now}
 }
 
 type ReconcileBasicAuth struct {
@@ -42,6 +42,7 @@ type ReconcileBasicAuth struct {
 	// that reads objects from the cache and writes to the apiserver
 	client client.Client
 	scheme *runtime.Scheme
+	now    func() time.Time
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -57,7 +58,6 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -105,7 +105,6 @@ func (r *ReconcileBasicAuth) updateSecret(ctx context.Context, instance *v1alpha
 	username := instance.Spec.Username
 	length := instance.Spec.Length
 	encoding := instance.Spec.Encoding
-	regenerate := instance.Spec.ForceRegenerate
 	data := instance.Spec.Data
 
 	existingAuth := existing.Data[secret.FieldBasicAuthIngress]
@@ -114,28 +113,41 @@ func (r *ReconcileBasicAuth) updateSecret(ctx context.Context, instance *v1alpha
 	if targetSecret.Data == nil {
 		targetSecret.Data = make(map[string][]byte)
 	}
+	rotationResult, rotate, err := crd.ScheduleRotation(instance.Spec.RotationInterval, targetSecret, r.now())
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	regenerate := instance.Spec.ForceRegenerate || rotate
 
 	c := crd.Client{Client: r.client}
 
 	if len(existingAuth) > 0 && !regenerate {
 		// auth is set and regeneration is not forced, only update new data fields
-		crd.UpdateData(data, targetSecret, regenerate)
+		crd.UpdateData(data, targetSecret, instance.Spec.ForceRegenerate)
 
-		return c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+		result, err := c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+		if err != nil {
+			return result, err
+		}
+		return rotationResult, nil
 	}
 
 	// either auth is not set or regeneration is forced, create new values
 
 	// generate auth fields and populate targetSecret.Data with them
-	err := secret.GenerateBasicAuthData(reqLogger, &secret.BasicAuthConstraints{Length: length, Encoding: encoding, Username: username}, targetSecret.Data)
+	err = secret.GenerateBasicAuthData(reqLogger, &secret.BasicAuthConstraints{Length: length, Encoding: encoding, Username: username}, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	// add new/updated fields from crd spec
-	crd.UpdateData(data, targetSecret, regenerate)
+	crd.UpdateData(data, targetSecret, instance.Spec.ForceRegenerate)
 
-	return c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	result, err := c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
 }
 
 // createNewSecret creates a new basic auth secret from the provided values. The Secret's owner will be set
@@ -145,6 +157,11 @@ func (r *ReconcileBasicAuth) createNewSecret(ctx context.Context, instance *v1al
 	length := instance.Spec.Length
 	encoding := instance.Spec.Encoding
 	data := instance.Spec.Data
+	rotationSecret := &v1.Secret{}
+	rotationResult, _, err := crd.ScheduleRotation(instance.Spec.RotationInterval, rotationSecret, r.now())
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	values := make(map[string][]byte)
 
@@ -153,12 +170,16 @@ func (r *ReconcileBasicAuth) createNewSecret(ctx context.Context, instance *v1al
 	}
 
 	// generate auth fields and populate values with them
-	err := secret.GenerateBasicAuthData(reqLogger, &secret.BasicAuthConstraints{Length: length, Encoding: encoding, Username: username}, values)
+	err = secret.GenerateBasicAuthData(reqLogger, &secret.BasicAuthConstraints{Length: length, Encoding: encoding, Username: username}, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	c := crd.Client{Client: r.client}
 
-	return c.ClientCreateSecret(ctx, values, instance, r.scheme)
+	result, err := c.ClientCreateSecretWithAnnotations(ctx, values, rotationSecret.Annotations, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
 }

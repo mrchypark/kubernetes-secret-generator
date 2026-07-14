@@ -15,8 +15,10 @@ type StringSecretSpec struct {
 	// +optional
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
-	ForceRegenerate bool    `json:"forceRegenerate,omitempty"`
-	Fields          []Field `json:"fields"`
+	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// +optional
+	RotationInterval string  `json:"rotationInterval,omitempty"`
+	Fields           []Field `json:"fields"`
 }
 
 type Field struct {

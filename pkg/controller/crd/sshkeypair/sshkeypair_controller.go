@@ -2,6 +2,7 @@ package sshkeypair
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -33,7 +34,7 @@ func Add(mgr manager.Manager) error {
 
 // NewReconciler returns a new reconcile.Reconciler
 func NewReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileSSHKeyPair{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileSSHKeyPair{client: mgr.GetClient(), scheme: mgr.GetScheme(), now: time.Now}
 }
 
 type ReconcileSSHKeyPair struct {
@@ -41,6 +42,7 @@ type ReconcileSSHKeyPair struct {
 	// that reads objects from the cache and writes to the apiserver
 	client client.Client
 	scheme *runtime.Scheme
+	now    func() time.Time
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -56,7 +58,6 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -104,7 +105,6 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	// get config values from instance
 	algorithm := instance.Spec.Algorithm
 	length := instance.Spec.Length
-	regenerate := instance.Spec.ForceRegenerate
 	data := instance.Spec.Data
 	instancePrivateKey := instance.Spec.PrivateKey
 	privateKeyField := instance.GetPrivateKeyField()
@@ -116,8 +116,13 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	if targetSecret.Data == nil {
 		targetSecret.Data = make(map[string][]byte)
 	}
+	rotationResult, rotate, err := r.scheduleRotation(instance, targetSecret)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	regenerate := instance.Spec.ForceRegenerate
 
-	keyRegenerate := regenerate
+	keyRegenerate := regenerate || rotate
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {
@@ -128,14 +133,18 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 
 	crd.UpdateData(data, targetSecret, regenerate)
 
-	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, keyRegenerate, targetSecret.Data)
+	err = secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, keyRegenerate, targetSecret.Data)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	c := crd.Client{Client: r.client}
 
-	return c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	result, err := c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
 }
 
 // createNewSecret creates a new ssh key pair from the provided values. The Secret's owner will be set
@@ -151,6 +160,11 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 	instancePrivateKey := []byte(instance.Spec.PrivateKey)
 	privateKeyField := instance.GetPrivateKeyField()
 	publicKeyField := instance.GetPublicKeyField()
+	rotationSecret := &v1.Secret{}
+	rotationResult, _, err := r.scheduleRotation(instance, rotationSecret)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	for key := range data {
 		values[key] = []byte(data[key])
@@ -158,12 +172,23 @@ func (r *ReconcileSSHKeyPair) createNewSecret(ctx context.Context, instance *v1a
 
 	values[privateKeyField] = instancePrivateKey
 
-	err := secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, false, values)
+	err = secret.GenerateSSHKeypairDataWithAlgorithm(reqLogger, algorithm, length, privateKeyField, publicKeyField, false, values)
 	if err != nil {
 		return reconcile.Result{RequeueAfter: time.Second * 30}, err
 	}
 
 	c := crd.Client{Client: r.client}
 
-	return c.ClientCreateSecret(ctx, values, instance, r.scheme)
+	result, err := c.ClientCreateSecretWithAnnotations(ctx, values, rotationSecret.Annotations, instance, r.scheme)
+	if err != nil {
+		return result, err
+	}
+	return rotationResult, nil
+}
+
+func (r *ReconcileSSHKeyPair) scheduleRotation(instance *v1alpha1.SSHKeyPair, target *v1.Secret) (reconcile.Result, bool, error) {
+	if instance.Spec.RotationInterval != "" && instance.Spec.PrivateKey != "" {
+		return reconcile.Result{}, false, fmt.Errorf("rotationInterval cannot be used with a supplied privateKey")
+	}
+	return crd.ScheduleRotation(instance.Spec.RotationInterval, target, r.now())
 }

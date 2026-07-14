@@ -19,6 +19,8 @@ type BasicAuthSpec struct {
 	Data map[string]string `json:"data,omitempty"`
 	// +optional
 	ForceRegenerate bool `json:"forceRegenerate,omitempty"`
+	// +optional
+	RotationInterval string `json:"rotationInterval,omitempty"`
 }
 
 // BasicAuthStatus defines the observed state of BasicAuth

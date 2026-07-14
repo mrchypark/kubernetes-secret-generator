@@ -75,10 +75,28 @@ type Client struct {
 // ref to set the status of instance
 func (c *Client) ClientCreateSecret(ctx context.Context, values map[string][]byte,
 	instance v1alpha1.APIObject, scheme *runtime.Scheme) (reconcile.Result, error) {
+	return c.clientCreateSecret(ctx, values, nil, instance, scheme)
+}
+
+// ClientCreateSecretWithAnnotations creates a Secret with the supplied
+// annotations without changing the existing ClientCreateSecret API.
+func (c *Client) ClientCreateSecretWithAnnotations(ctx context.Context, values map[string][]byte, annotations map[string]string,
+	instance v1alpha1.APIObject, scheme *runtime.Scheme) (reconcile.Result, error) {
+	return c.clientCreateSecret(ctx, values, annotations, instance, scheme)
+}
+
+func (c *Client) clientCreateSecret(ctx context.Context, values map[string][]byte, annotations map[string]string,
+	instance v1alpha1.APIObject, scheme *runtime.Scheme) (reconcile.Result, error) {
 	desiredSecret, err := NewSecret(instance, values, instance.GetType())
 	if err != nil {
 		// unable to set ownership of secret
 		return reconcile.Result{}, err
+	}
+	if len(annotations) > 0 {
+		desiredSecret.Annotations = make(map[string]string, len(annotations))
+		for key, value := range annotations {
+			desiredSecret.Annotations[key] = value
+		}
 	}
 
 	err = c.Create(ctx, desiredSecret)

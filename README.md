@@ -207,6 +207,8 @@ data:
 The operator supports three kinds of custom resources: `StringSecret`, `SSHKeyPair` and `BasicAuth`. These crs can be used to trigger creation, update and deletion of desired secrets.
 All crs support the field `spec.type` which can be used to define the kubernetes type of the generated `Secret`, e.g. "Opaque"
 
+Starting with v3.5.0, all three resources accept an optional `spec.rotationInterval` using Go duration syntax, for example `24h`. The default is empty, which disables scheduled rotation. Valid intervals range from `1m` to `8760h`. Enabling rotation records an anchor on the generated `Secret` without rotating immediately; generated credentials rotate once when the interval becomes due. Literal `spec.data` entries and unrelated Secret data are preserved. Rotation cannot be combined with `SSHKeyPair.spec.privateKey`, and a `StringSecret` needs at least one entry in `spec.fields`.
+
 ### Secure Random Strings via StringSecret-CR
 
 A `StringSecret` resource can be used to generate secure random strings similar to the ones offered by the annotation approach.
