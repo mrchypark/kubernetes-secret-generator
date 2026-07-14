@@ -2,6 +2,7 @@ package crd
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,25 @@ func IgnoreStatusUpdatePredicate[T client.Object]() predicate.TypedPredicate[T] 
 	}
 }
 
+func SecretDataLossPredicate() predicate.TypedPredicate[*corev1.Secret] {
+	return predicate.TypedFuncs[*corev1.Secret]{
+		CreateFunc: func(event.TypedCreateEvent[*corev1.Secret]) bool { return false },
+		UpdateFunc: func(e event.TypedUpdateEvent[*corev1.Secret]) bool {
+			if len(e.ObjectNew.Data) < len(e.ObjectOld.Data) {
+				return true
+			}
+			for _, value := range e.ObjectNew.Data {
+				if len(value) == 0 {
+					return true
+				}
+			}
+			return false
+		},
+		DeleteFunc:  func(event.TypedDeleteEvent[*corev1.Secret]) bool { return true },
+		GenericFunc: func(event.TypedGenericEvent[*corev1.Secret]) bool { return false },
+	}
+}
+
 type Client struct {
 	client.Client
 }
@@ -125,6 +145,16 @@ func (c *Client) ClientUpdateSecret(ctx context.Context, targetSecret *corev1.Se
 		return reconcile.Result{}, err
 	}
 	return reconcile.Result{}, nil
+}
+
+func (c *Client) ClientReconcileSecret(ctx context.Context, existing, targetSecret *corev1.Secret, instance v1alpha1.APIObject, scheme *runtime.Scheme) (reconcile.Result, error) {
+	if reflect.DeepEqual(existing, targetSecret) {
+		if err := c.getSecretRefAndSetStatus(ctx, existing, instance, scheme); err != nil {
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{}, nil
+	}
+	return c.ClientUpdateSecret(ctx, targetSecret, instance, scheme)
 }
 
 // getSecretRefAndSetStatus fetches the object reference for desiredSecret and writes it into the status of instance.

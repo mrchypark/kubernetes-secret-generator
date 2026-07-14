@@ -57,6 +57,10 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	if err != nil {
 		return err
 	}
+	err = c.Watch(source.Kind(mgr.GetCache(), &v1.Secret{}, handler.TypedEnqueueRequestForOwner[*v1.Secret](mgr.GetScheme(), mgr.GetRESTMapper(), &v1alpha1.StringSecret{}, handler.OnlyControllerOwner()), crd.SecretDataLossPredicate()))
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -122,7 +126,7 @@ func (r *ReconcileStringSecret) updateSecret(ctx context.Context, instance *v1al
 
 	c := crd.Client{Client: r.client}
 
-	result, err := c.ClientUpdateSecret(ctx, targetSecret, instance, r.scheme)
+	result, err := c.ClientReconcileSecret(ctx, existing, targetSecret, instance, r.scheme)
 	if err != nil {
 		return result, err
 	}
