@@ -72,8 +72,10 @@ func SecretDataLossPredicate() predicate.TypedPredicate[*corev1.Secret] {
 	return predicate.TypedFuncs[*corev1.Secret]{
 		CreateFunc: func(event.TypedCreateEvent[*corev1.Secret]) bool { return false },
 		UpdateFunc: func(e event.TypedUpdateEvent[*corev1.Secret]) bool {
-			if len(e.ObjectNew.Data) < len(e.ObjectOld.Data) {
-				return true
+			for key := range e.ObjectOld.Data {
+				if _, ok := e.ObjectNew.Data[key]; !ok {
+					return true
+				}
 			}
 			for _, value := range e.ObjectNew.Data {
 				if len(value) == 0 {

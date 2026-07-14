@@ -225,7 +225,7 @@ All crs support the field `spec.type` which can be used to define the kubernetes
 
 Starting with v3.5.0, all three resources accept an optional `spec.rotationInterval` using Go duration syntax, for example `24h`. The default is empty, which disables scheduled rotation. Valid intervals range from `1m` to `8760h`. Enabling rotation records an anchor on the generated `Secret` without rotating immediately; generated credentials rotate once when the interval becomes due. Literal `spec.data` entries and unrelated Secret data are preserved. Rotation cannot be combined with `SSHKeyPair.spec.privateKey`, and a `StringSecret` needs at least one entry in `spec.fields`.
 
-Owned Secret deletion and missing or empty generated values are repaired additively. Nonempty changed values are intentionally preserved. See [rotation details](docs/ROTATION.md).
+Owned Secret deletion and missing or empty managed literal/generated keys are repaired additively. Nonempty changed values are intentionally preserved. See [rotation details](docs/ROTATION.md).
 
 ### Secure Random Strings via StringSecret-CR
 

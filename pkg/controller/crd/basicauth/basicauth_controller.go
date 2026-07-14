@@ -111,8 +111,6 @@ func (r *ReconcileBasicAuth) updateSecret(ctx context.Context, instance *v1alpha
 	encoding := instance.Spec.Encoding
 	data := instance.Spec.Data
 
-	existingAuth := existing.Data[secret.FieldBasicAuthIngress]
-
 	targetSecret := existing.DeepCopy()
 	if targetSecret.Data == nil {
 		targetSecret.Data = make(map[string][]byte)
@@ -125,8 +123,10 @@ func (r *ReconcileBasicAuth) updateSecret(ctx context.Context, instance *v1alpha
 
 	c := crd.Client{Client: r.client}
 
-	if len(existingAuth) > 0 && !regenerate {
-		// auth is set and regeneration is not forced, only update new data fields
+	if !regenerate {
+		if err := secret.RepairBasicAuthData(reqLogger, &secret.BasicAuthConstraints{Length: length, Encoding: encoding, Username: username}, targetSecret.Data); err != nil {
+			return reconcile.Result{}, err
+		}
 		crd.UpdateData(data, targetSecret, instance.Spec.ForceRegenerate)
 
 		result, err := c.ClientReconcileSecret(ctx, existing, targetSecret, instance, r.scheme)

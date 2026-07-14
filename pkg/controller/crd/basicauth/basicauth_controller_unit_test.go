@@ -3,9 +3,11 @@ package basicauth
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +19,85 @@ import (
 	"github.com/mittwald/kubernetes-secret-generator/pkg/controller/crd"
 	"github.com/mittwald/kubernetes-secret-generator/pkg/controller/secret"
 )
+
+func TestRepairPartialBasicAuthData(t *testing.T) {
+	password := []byte("existing-password")
+	hash, err := bcrypt.GenerateFromPassword(password, bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := append([]byte("admin:"), hash...)
+
+	tests := []struct {
+		name    string
+		field   string
+		missing bool
+		wantErr bool
+	}{
+		{"auth missing", secret.FieldBasicAuthIngress, true, false},
+		{"auth empty", secret.FieldBasicAuthIngress, false, false},
+		{"username missing", secret.FieldBasicAuthUsername, true, false},
+		{"username empty", secret.FieldBasicAuthUsername, false, false},
+		{"password missing", secret.FieldBasicAuthPassword, true, true},
+		{"password empty", secret.FieldBasicAuthPassword, false, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := map[string][]byte{
+				secret.FieldBasicAuthIngress:  bytes.Clone(auth),
+				secret.FieldBasicAuthUsername: []byte("admin"),
+				secret.FieldBasicAuthPassword: bytes.Clone(password),
+			}
+			if tt.missing {
+				delete(data, tt.field)
+			} else {
+				data[tt.field] = nil
+			}
+			before := cloneByteMap(data)
+
+			err := secret.RepairBasicAuthData(log, &secret.BasicAuthConstraints{Username: "admin", Length: "16", Encoding: "base64"}, data)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("RepairBasicAuthData() error = nil, want error")
+				}
+				if !reflect.DeepEqual(data, before) {
+					t.Fatalf("data mutated on error: got %v, want %v", data, before)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data[secret.FieldBasicAuthPassword], password) || string(data[secret.FieldBasicAuthUsername]) != "admin" {
+				t.Fatal("remaining nonempty username or password changed")
+			}
+			parsedUser, parsedHash, ok := bytes.Cut(data[secret.FieldBasicAuthIngress], []byte(":"))
+			if !ok || string(parsedUser) != "admin" || bcrypt.CompareHashAndPassword(parsedHash, password) != nil {
+				t.Fatal("repaired auth is inconsistent")
+			}
+		})
+	}
+
+	t.Run("inconsistent auth and password does not mutate", func(t *testing.T) {
+		data := map[string][]byte{secret.FieldBasicAuthIngress: bytes.Clone(auth), secret.FieldBasicAuthPassword: []byte("different")}
+		before := cloneByteMap(data)
+		if err := secret.RepairBasicAuthData(log, &secret.BasicAuthConstraints{}, data); err == nil {
+			t.Fatal("RepairBasicAuthData() error = nil, want error")
+		}
+		if !reflect.DeepEqual(data, before) {
+			t.Fatal("inconsistent state was mutated")
+		}
+	})
+}
+
+func cloneByteMap(in map[string][]byte) map[string][]byte {
+	out := make(map[string][]byte, len(in))
+	for key, value := range in {
+		out[key] = bytes.Clone(value)
+	}
+	return out
+}
 
 func TestDueRotationPreservesLiteralAndUnmanagedData(t *testing.T) {
 	now := time.Date(2026, 7, 14, 1, 2, 3, 4, time.UTC)

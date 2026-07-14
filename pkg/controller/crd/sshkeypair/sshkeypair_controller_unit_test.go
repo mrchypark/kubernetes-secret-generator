@@ -74,6 +74,76 @@ func TestDueRotationAndSuppliedPrivateKeyGuard(t *testing.T) {
 	})
 }
 
+func TestPartialSSHKeyRepair(t *testing.T) {
+	valid := make(map[string][]byte)
+	if err := secret.GenerateSSHKeypairDataWithAlgorithm(log, secret.SSHKeyAlgorithmED25519, "", secret.SecretFieldPrivateKey, secret.SecretFieldPublicKey, true, valid); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name         string
+		privateValue []byte
+		publicValue  []byte
+		wantErr      bool
+	}{
+		{"private missing", nil, bytes.Clone(valid[secret.SecretFieldPublicKey]), true},
+		{"private empty", []byte{}, bytes.Clone(valid[secret.SecretFieldPublicKey]), true},
+		{"public missing", bytes.Clone(valid[secret.SecretFieldPrivateKey]), nil, false},
+		{"public empty", bytes.Clone(valid[secret.SecretFieldPrivateKey]), []byte{}, false},
+		{"both missing", nil, nil, false},
+		{"both empty", []byte{}, []byte{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := true
+			cr := &v1alpha1.SSHKeyPair{
+				TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha1.SchemeGroupVersion.String(), Kind: Kind},
+				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: "default", UID: "owner-uid"},
+				Spec:       v1alpha1.SSHKeyPairSpec{Algorithm: secret.SSHKeyAlgorithmED25519},
+			}
+			data := map[string][]byte{"unmanaged": []byte("keep")}
+			if tt.privateValue != nil {
+				data[secret.SecretFieldPrivateKey] = bytes.Clone(tt.privateValue)
+			}
+			if tt.publicValue != nil {
+				data[secret.SecretFieldPublicKey] = bytes.Clone(tt.publicValue)
+			}
+			existing := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{Kind: Kind, Controller: &controller}}},
+				Data:       data,
+			}
+			before := existing.DeepCopy()
+			c, scheme := sshClient(t, cr, existing)
+			r := &ReconcileSSHKeyPair{client: c, scheme: scheme, now: time.Now}
+			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cr)})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Reconcile() error = nil, want error")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+
+			got := &corev1.Secret{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(existing), got); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantErr {
+				if !bytes.Equal(got.Data[secret.SecretFieldPublicKey], before.Data[secret.SecretFieldPublicKey]) || !bytes.Equal(got.Data["unmanaged"], before.Data["unmanaged"]) {
+					t.Fatal("Secret mutated on impossible private-key repair")
+				}
+				return
+			}
+			if len(got.Data[secret.SecretFieldPrivateKey]) == 0 || len(got.Data[secret.SecretFieldPublicKey]) == 0 {
+				t.Fatal("missing SSH key field was not repaired")
+			}
+			if len(before.Data[secret.SecretFieldPrivateKey]) > 0 && !bytes.Equal(got.Data[secret.SecretFieldPrivateKey], before.Data[secret.SecretFieldPrivateKey]) {
+				t.Fatal("existing private key changed")
+			}
+		})
+	}
+}
+
 func sshClient(t *testing.T, objects ...client.Object) (client.Client, *runtime.Scheme) {
 	t.Helper()
 	scheme := runtime.NewScheme()

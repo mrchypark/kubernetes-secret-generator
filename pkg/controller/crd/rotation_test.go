@@ -155,6 +155,9 @@ func TestSecretDataLossPredicate(t *testing.T) {
 	if !predicate.Update(event.TypedUpdateEvent[*corev1.Secret]{ObjectOld: full, ObjectNew: &corev1.Secret{Data: map[string][]byte{"other": []byte("keep")}}}) {
 		t.Fatal("removed key should enqueue")
 	}
+	if !predicate.Update(event.TypedUpdateEvent[*corev1.Secret]{ObjectOld: full, ObjectNew: &corev1.Secret{Data: map[string][]byte{"generated": []byte("value"), "replacement": []byte("keep")}}}) {
+		t.Fatal("same-size key replacement should enqueue")
+	}
 	if !predicate.Delete(event.TypedDeleteEvent[*corev1.Secret]{Object: full}) {
 		t.Fatal("delete event should enqueue")
 	}

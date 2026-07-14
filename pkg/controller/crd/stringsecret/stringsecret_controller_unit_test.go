@@ -73,6 +73,27 @@ func TestRotationAndAdditiveSecretRepair(t *testing.T) {
 			wantUnmanaged: "keep",
 		},
 		{
+			name:          "missing managed literal is repaired",
+			fields:        generatedFields(),
+			secret:        ownedStringSecret(map[string][]byte{"generated": []byte("old"), "unmanaged": []byte("keep")}),
+			wantLiteral:   "literal",
+			wantUnmanaged: "keep",
+		},
+		{
+			name:          "empty managed literal is repaired",
+			fields:        generatedFields(),
+			secret:        ownedStringSecret(map[string][]byte{"generated": []byte("old"), "literal": nil, "unmanaged": []byte("keep")}),
+			wantLiteral:   "literal",
+			wantUnmanaged: "keep",
+		},
+		{
+			name:          "nonempty managed literal is preserved",
+			fields:        generatedFields(),
+			secret:        ownedStringSecret(map[string][]byte{"generated": []byte("old"), "literal": []byte("tampered"), "unmanaged": []byte("keep")}),
+			wantLiteral:   "tampered",
+			wantUnmanaged: "keep",
+		},
+		{
 			name:          "force behavior remains regenerative",
 			force:         true,
 			fields:        generatedFields(),

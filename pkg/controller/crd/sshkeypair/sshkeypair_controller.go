@@ -115,6 +115,7 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	publicKeyField := instance.GetPublicKeyField()
 
 	existingPrivateKey := existing.Data[privateKeyField]
+	existingPublicKey := existing.Data[publicKeyField]
 
 	targetSecret := existing.DeepCopy()
 	if targetSecret.Data == nil {
@@ -127,6 +128,9 @@ func (r *ReconcileSSHKeyPair) updateSecret(ctx context.Context, existing *v1.Sec
 	regenerate := instance.Spec.ForceRegenerate
 
 	keyRegenerate := regenerate || rotate
+	if len(existingPrivateKey) == 0 && len(existingPublicKey) > 0 && !keyRegenerate {
+		return reconcile.Result{}, fmt.Errorf("cannot restore missing SSH private key without replacing the existing public key")
+	}
 
 	// if regeneration is forced or existing private key is empty use private key from spec
 	if len(instancePrivateKey) > 0 && (len(existingPrivateKey) == 0 || regenerate) {

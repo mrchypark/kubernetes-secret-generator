@@ -1,6 +1,9 @@
 package secret
 
 import (
+	"bytes"
+	"fmt"
+
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -86,5 +89,50 @@ func GenerateBasicAuthData(logger logr.Logger, cons *BasicAuthConstraints, data 
 	data[FieldBasicAuthUsername] = []byte(cons.Username)
 	data[FieldBasicAuthPassword] = password
 
+	return nil
+}
+
+// RepairBasicAuthData fills only missing generated fields. Existing nonempty
+// values are never replaced; inconsistent or non-derivable partial state is
+// rejected without mutating data.
+func RepairBasicAuthData(logger logr.Logger, cons *BasicAuthConstraints, data map[string][]byte) error {
+	auth := data[FieldBasicAuthIngress]
+	username := data[FieldBasicAuthUsername]
+	password := data[FieldBasicAuthPassword]
+
+	if len(auth) > 0 && len(username) > 0 && len(password) > 0 {
+		return nil
+	}
+	if len(auth) == 0 && len(username) == 0 && len(password) == 0 {
+		return GenerateBasicAuthData(logger, cons, data)
+	}
+	if len(password) == 0 {
+		return fmt.Errorf("cannot restore missing basic-auth password from its bcrypt hash")
+	}
+
+	pending := make(map[string][]byte)
+	if len(username) == 0 {
+		parsedUsername, hash, ok := bytes.Cut(auth, []byte(":"))
+		if !ok || len(parsedUsername) == 0 || len(hash) == 0 {
+			return fmt.Errorf("cannot restore basic-auth username from malformed auth field")
+		}
+		if err := bcrypt.CompareHashAndPassword(hash, password); err != nil {
+			return fmt.Errorf("cannot restore basic-auth username from inconsistent auth and password: %w", err)
+		}
+		pending[FieldBasicAuthUsername] = append([]byte(nil), parsedUsername...)
+		username = parsedUsername
+	}
+
+	if len(auth) == 0 {
+		hash, err := bcrypt.GenerateFromPassword(password, bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("hash existing basic-auth password: %w", err)
+		}
+		pending[FieldBasicAuthIngress] = append(append([]byte(nil), username...), append([]byte(":"), hash...)...)
+	}
+
+	for key, value := range pending {
+		data[key] = value
+	}
 	return nil
 }

@@ -11,7 +11,7 @@ The default is empty, so upgrading does not rotate existing credentials. On firs
 
 Rotation preserves literal `spec.data`, unrelated data, type, labels, and ownership. It rejects invalid durations before changing credentials. `StringSecret` rotation requires a generated field, and `SSHKeyPair` rotation cannot be combined with a supplied `spec.privateKey`.
 
-The owned-Secret watch is deliberately additive: deletion and missing or empty generated values trigger repair, while nonempty changed values are left untouched. `forceRegenerate` keeps its existing 3.4 behavior.
+The owned-Secret watch is deliberately additive: deletion and missing or empty managed literal/generated keys trigger repair, while nonempty changed values are left untouched. `forceRegenerate` keeps its existing 3.4 behavior.
 
 ## Upgrade from 3.4
 
