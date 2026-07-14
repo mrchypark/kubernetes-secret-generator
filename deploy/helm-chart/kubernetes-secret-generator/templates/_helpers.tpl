@@ -102,10 +102,14 @@ imagePullSecrets:
 {{- end -}}
 
 {{ define "kubernetes-secret-generator.images.image" -}}
-    {{ $registry := .root.Values.global.imageRegistry | default .Values.registry -}}
-    {{ if $registry -}}
-        {{ $registry }}/{{ .Values.repository }}:{{ .Values.tag | default .root.Chart.AppVersion }}
-    {{- else -}}
-        {{ .Values.repository }}:{{ .Values.tag | default .root.Chart.AppVersion }}
-    {{- end }}
+{{- $registry := .root.Values.global.imageRegistry | default .Values.registry -}}
+{{- $repository := .Values.repository -}}
+{{- if $registry -}}
+{{- $repository = printf "%s/%s" $registry $repository -}}
+{{- end -}}
+{{- if .Values.digest -}}
+{{- printf "%s@%s" $repository .Values.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository (.Values.tag | default .root.Chart.AppVersion) -}}
+{{- end -}}
 {{- end -}}

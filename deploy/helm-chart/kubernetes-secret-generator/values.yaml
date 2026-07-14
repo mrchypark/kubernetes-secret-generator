@@ -8,6 +8,8 @@ image:
   repository: mrchypark/kubernetes-secret-generator
   # if no tag is given, the chart's appVersion is used
   # tag: latest
+  # digest: sha256:...
+  digest: ""
   pullPolicy: Always
   pullSecrets: []
 
@@ -28,19 +30,18 @@ serviceAccount:
   name:
 
 podSecurityContext:
-  {}
-  # fsGroup: 2000
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
 
 priorityClassName: ""
 
 securityContext:
-  {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
 
 resources:
   {}

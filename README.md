@@ -58,6 +58,22 @@ Afterwards, deploy the operator using:
     ```shellsession
     $ helm upgrade --install kubernetes-secret-generator mittwald/kubernetes-secret-generator
     ```
+
+For an upgrade from 3.4.x, apply the three files in `deploy/crds/` before the Helm upgrade. Helm does not update CRDs from a chart's `crds/` directory. This is an ordinary in-place 3.x upgrade; no controller shutdown or offline migration is required.
+
+The 3.5 chart still accepts every 3.4 value. It defaults to a restricted pod/container security context and also accepts `image.digest` (which takes precedence over `image.tag`). A legacy custom image that needs broader privileges can explicitly override the existing `podSecurityContext` and `securityContext` maps, for example:
+
+```yaml
+podSecurityContext:
+  runAsNonRoot: false
+  seccompProfile:
+    type: Unconfined
+securityContext:
+  allowPrivilegeEscalation: true
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: []
+```
  
 ### Manually
 
@@ -208,6 +224,8 @@ The operator supports three kinds of custom resources: `StringSecret`, `SSHKeyPa
 All crs support the field `spec.type` which can be used to define the kubernetes type of the generated `Secret`, e.g. "Opaque"
 
 Starting with v3.5.0, all three resources accept an optional `spec.rotationInterval` using Go duration syntax, for example `24h`. The default is empty, which disables scheduled rotation. Valid intervals range from `1m` to `8760h`. Enabling rotation records an anchor on the generated `Secret` without rotating immediately; generated credentials rotate once when the interval becomes due. Literal `spec.data` entries and unrelated Secret data are preserved. Rotation cannot be combined with `SSHKeyPair.spec.privateKey`, and a `StringSecret` needs at least one entry in `spec.fields`.
+
+Owned Secret deletion and missing or empty generated values are repaired additively. Nonempty changed values are intentionally preserved. See [rotation details](docs/ROTATION.md).
 
 ### Secure Random Strings via StringSecret-CR
 
