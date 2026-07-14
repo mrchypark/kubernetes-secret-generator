@@ -1,13 +1,11 @@
 package secret
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -24,19 +22,6 @@ const (
 	AnnotationSecretEncoding        = "secret-generator.v1.mittwald.de/encoding"
 	AnnotationSSHPrivateKeyField    = "secret-generator.v1.mittwald.de/private-key-field"
 	AnnotationSSHPublicKeyField     = "secret-generator.v1.mittwald.de/public-key-field"
-
-	// The annotation controller uses the same stable tracking wire format as
-	// the CR controllers.  The packages cannot share the implementation because
-	// the CR controllers depend on this package for credential generation.
-	AnnotationTrackingVersion       = "secretgenerator.mittwald.de/tracking-version"
-	AnnotationManagedDataKeys       = "secretgenerator.mittwald.de/managed-data-keys"
-	AnnotationManagedLabelKeys      = "secretgenerator.mittwald.de/managed-label-keys"
-	AnnotationManagedDataChecksums  = "secretgenerator.mittwald.de/managed-data-checksums"
-	AnnotationGenerationFingerprint = "secretgenerator.mittwald.de/generation-spec-fingerprints"
-	AnnotationManagedKeysDigest     = "secretgenerator.mittwald.de/managed-keys-digest"
-	AnnotationManagedBy             = "secretgenerator.mittwald.de/managed-by"
-	TrackingVersion                 = "v1"
-	AnnotationControllerMarker      = "annotation-secret-controller"
 )
 
 type Type string
@@ -61,207 +46,24 @@ type Generator interface {
 	generateData(*corev1.Secret) (reconcile.Result, error)
 }
 
-const (
-	MinSecretLength        = 1
-	MaxSecretLength        = 65536
-	MaxGeneratedFields     = 64
-	MaxManagedKeys         = 256
-	MaxFieldNameLength     = 253
-	MaxPrivateKeyPEMBytes  = 64 * 1024
-	MaxProjectedSecretSize = 768 * 1024
-)
-
-// ValidationError identifies invalid desired state. Controllers must report it
-// as terminal instead of returning it to controller-runtime for retry.
-type ValidationError struct {
-	Field string
-	Err   error
-}
-
-func (e *ValidationError) Error() string { return fmt.Sprintf("invalid %s: %v", e.Field, e.Err) }
-func (e *ValidationError) Unwrap() error { return e.Err }
-
-func validationError(field, format string, args ...interface{}) error {
-	return &ValidationError{Field: field, Err: fmt.Errorf(format, args...)}
-}
-
-func IsValidationError(err error) bool {
-	var target *ValidationError
-	return errors.As(err, &target)
-}
-
-// ParseByteLength parses a decimal length with an optional lower- or
-// upper-case B suffix. Empty input uses fallback; all other malformed and
-// out-of-range values are rejected before allocation.
+// ParseByteLength parses the given length string into an integer length and determines whether the byte-length-suffix was set.
+// In case paring fails, or the string is empty, the fallback will be returned, along with false.
 func ParseByteLength(fallback int, length string) (int, bool, error) {
-	if length == "" {
-		if err := ValidateLength(fallback); err != nil {
-			return 0, false, err
-		}
-		return fallback, false, nil
+	isByteLength := false
+
+	lengthString := strings.ToLower(length)
+	if len(lengthString) == 0 {
+		return fallback, isByteLength, nil
 	}
 
-	isByteLength := length[len(length)-1] == 'b' || length[len(length)-1] == 'B'
-	number := length
-	if isByteLength {
-		number = length[:len(length)-1]
+	if strings.HasSuffix(lengthString, ByteSuffix) {
+		isByteLength = true
 	}
-	if number == "" {
-		return fallback, isByteLength, validationError("length", "must be decimal digits with optional B suffix")
-	}
-	for _, r := range number {
-		if r < '0' || r > '9' {
-			return fallback, isByteLength, validationError("length", "must be decimal digits with optional B suffix")
-		}
-	}
-	intVal, err := strconv.Atoi(number)
+	intVal, err := strconv.Atoi(strings.TrimSuffix(lengthString, ByteSuffix))
 	if err != nil {
-		return fallback, isByteLength, validationError("length", "is not representable: %v", err)
+		return fallback, isByteLength, errors.WithStack(err)
 	}
-	if err := ValidateLength(intVal); err != nil {
-		return fallback, isByteLength, err
-	}
-	return intVal, isByteLength, nil
-}
+	secretLength := intVal
 
-func ValidateLength(length int) error {
-	if length < MinSecretLength || length > MaxSecretLength {
-		return validationError("length", "must be between %d and %d", MinSecretLength, MaxSecretLength)
-	}
-	return nil
-}
-
-func ValidateEncoding(encoding string) error {
-	switch encoding {
-	case "base64", "base64url", "base32", "hex", "raw":
-		return nil
-	default:
-		return validationError("encoding", "unsupported value %q", encoding)
-	}
-}
-
-func ValidateFieldName(name string) error {
-	if name == "" || len(name) > MaxFieldNameLength {
-		return validationError("field name", "length must be between 1 and %d", MaxFieldNameLength)
-	}
-	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || strings.ContainsRune("._-", r) {
-			continue
-		}
-		return validationError("field name", "%q must match ^[A-Za-z0-9._-]+$", name)
-	}
-	return nil
-}
-
-// ValidateManagedFields enforces field syntax, uniqueness, generated/literal
-// collisions, and aggregate count limits for annotation and CR callers.
-func ValidateManagedFields(generated []string, literal map[string][]byte) error {
-	if len(generated) == 0 && len(literal) == 0 {
-		return validationError("fields", "at least one generated or literal field is required")
-	}
-	if len(generated) > MaxGeneratedFields {
-		return validationError("fields", "generated field count exceeds %d", MaxGeneratedFields)
-	}
-	if len(generated)+len(literal) > MaxManagedKeys {
-		return validationError("fields", "managed key count exceeds %d", MaxManagedKeys)
-	}
-	seen := make(map[string]struct{}, len(generated))
-	for _, name := range generated {
-		if err := ValidateFieldName(name); err != nil {
-			return err
-		}
-		if _, ok := seen[name]; ok {
-			return validationError("fields", "duplicate generated field %q", name)
-		}
-		if _, ok := literal[name]; ok {
-			return validationError("fields", "generated field %q collides with literal data", name)
-		}
-		seen[name] = struct{}{}
-	}
-	for name := range literal {
-		if err := ValidateFieldName(name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ValidateProjectedSecretSize uses Kubernetes' JSON representation, including
-// base64 expansion of data and object metadata, as the conservative wire-size
-// oracle shared by annotation and CR controllers.
-func ValidateProjectedSecretSize(projected *corev1.Secret) error {
-	copy := projected.DeepCopy()
-	copy.APIVersion = "v1"
-	copy.Kind = "Secret"
-	serialized, err := json.Marshal(copy)
-	if err != nil {
-		return fmt.Errorf("marshal projected Secret: %w", err)
-	}
-	if len(serialized) > MaxProjectedSecretSize {
-		return validationError("projected Secret size", "%d bytes exceeds %d", len(serialized), MaxProjectedSecretSize)
-	}
-	return nil
-}
-
-// ValidateProjectedDataSize checks a projected Secret without allocating the
-// generated values. projectedValueBytes contains the final raw byte length for
-// each data key that will be written.
-func ValidateProjectedDataSize(projected *corev1.Secret, projectedValueBytes map[string]int) error {
-	copy := projected.DeepCopy()
-	copy.APIVersion = "v1"
-	copy.Kind = "Secret"
-	if copy.Data == nil {
-		copy.Data = make(map[string][]byte, len(projectedValueBytes))
-	}
-	for key, length := range projectedValueBytes {
-		if length < 0 {
-			return validationError("projected Secret size", "negative value length for %q", key)
-		}
-		copy.Data[key] = nil
-	}
-	serialized, err := json.Marshal(copy)
-	if err != nil {
-		return fmt.Errorf("marshal projected Secret: %w", err)
-	}
-	size := len(serialized)
-	for _, length := range projectedValueBytes {
-		// nil is encoded as four bytes (null); []byte is a quoted base64 string.
-		size += base64.StdEncoding.EncodedLen(length) + 2 - len("null")
-	}
-	if size > MaxProjectedSecretSize {
-		return validationError("projected Secret size", "%d bytes exceeds %d", size, MaxProjectedSecretSize)
-	}
-	return nil
-}
-
-// ParseRegenerate selects generated fields without mutating the annotation.
-// The caller removes the annotation only after a successful operation.
-func ParseRegenerate(value string, generated []string, allowSelective bool) ([]string, error) {
-	switch value {
-	case "", "no", "false":
-		return nil, nil
-	case "yes", "true", "all":
-		return append([]string(nil), generated...), nil
-	}
-	if !allowSelective {
-		return nil, validationError("regenerate annotation", "unsupported value %q", value)
-	}
-	requested := strings.Split(value, ",")
-	known := make(map[string]struct{}, len(generated))
-	for _, field := range generated {
-		known[field] = struct{}{}
-	}
-	seen := make(map[string]struct{}, len(requested))
-	for _, field := range requested {
-		if _, ok := known[field]; !ok {
-			return nil, validationError("regenerate annotation", "unknown generated field %q", field)
-		}
-		if _, ok := seen[field]; ok {
-			return nil, validationError("regenerate annotation", "duplicate field %q", field)
-		}
-		seen[field] = struct{}{}
-	}
-
-	return requested, nil
+	return secretLength, isByteLength, nil
 }

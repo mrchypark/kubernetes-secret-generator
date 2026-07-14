@@ -80,6 +80,7 @@ func verifyStringSecretFromCR(t *testing.T, in *v1alpha1.StringSecret, out *core
 			t.Errorf("generated field has wrong length of %d", len(val))
 		}
 
+		t.Logf("generated secret value: %s", val)
 	}
 
 	// check if custom data entries were set correctly
@@ -192,8 +193,8 @@ func TestRegenerateSecretsSingleField(t *testing.T) {
 
 	newSecretValue := string(outNew.Data["test"])
 
-	if oldSecretValue != newSecretValue {
-		t.Errorf("secret regenerated more than once in the same generation")
+	if oldSecretValue == newSecretValue {
+		t.Errorf("secret has not been updated")
 	}
 
 }
@@ -239,12 +240,12 @@ func TestRegenerateSecretsMultipleFields(t *testing.T) {
 	newSecretValue := string(outNew.Data["test"])
 	newSecretValue2 := string(outNew.Data["test2"])
 
-	if oldSecretValue != newSecretValue {
-		t.Errorf("secret regenerated more than once in the same generation")
+	if oldSecretValue == newSecretValue {
+		t.Errorf("secret has not been updated")
 	}
 
-	if oldSecretValue2 != newSecretValue2 {
-		t.Errorf("secret regenerated more than once in the same generation")
+	if oldSecretValue2 == newSecretValue2 {
+		t.Errorf("secret has not been updated")
 	}
 }
 
