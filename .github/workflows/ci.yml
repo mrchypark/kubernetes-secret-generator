@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: 1.26.5
+  KUBECONFIG: /tmp/ksg-kubeconfig
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install pinned test tools
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          curl -fsSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.31.0/kind-linux-amd64
+          echo 'eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa  kind' | sha256sum -c -
+          sudo install kind /usr/local/bin/kind
+          curl -fsSLo helm.tgz https://get.helm.sh/helm-v3.21.3-linux-amd64.tar.gz
+          echo '15e041a93a590dce8100f39385cd98c84a765c9e36aeeb9e2dc6ff9e4769e2e0  helm.tgz' | sha256sum -c -
+          tar -xzf helm.tgz
+          sudo install linux-amd64/helm /usr/local/bin/helm
+
+      - name: Check source and workflows
+        run: |
+          test -z "$(find cmd pkg version -name '*.go' ! -name 'zz_generated.deepcopy.go' -exec gofmt -l {} +)"
+          go vet ./...
+          "$(go env GOPATH)/bin/actionlint" -shellcheck '' -pyflakes ''
+
+      - name: Create disposable test cluster
+        run: |
+          kind create cluster --name ksg-ci --image kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f --kubeconfig "$KUBECONFIG" --wait 90s
+          kubectl apply -f deploy/crds/
+
+      - name: Test, race, and enforce coverage
+        run: |
+          go test -count=1 -coverpkg=./pkg/... -coverprofile=coverage.out ./...
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
+          awk -v total="$total" 'BEGIN { if (total < 60) { print "coverage " total "% is below 60%"; exit 1 } }'
+          go test -count=1 -race ./...
+
+      - name: Verify Helm compatibility
+        run: |
+          chart=deploy/helm-chart/kubernetes-secret-generator
+          helm lint "$chart"
+          helm template legacy "$chart" --set installCRDs=true --set rbac.clusterRole=true --set watchNamespace='' >/tmp/legacy.yaml
+          helm template digest "$chart" --set image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | grep -q 'image:.*@sha256:'
+
+      - name: Build image
+        run: docker build -f build/Dockerfile --build-arg VERSION="${GITHUB_SHA::8}" --build-arg REVISION="$GITHUB_SHA" -t ksg-ci:test .
+
+      - name: Delete test cluster
+        if: always()
+        run: kind delete cluster --name ksg-ci
